@@ -1291,13 +1291,24 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
 
 def save_newsletter_html(html, saturday):
     """
-    Save the full newsletter HTML to ~/weekend_dispatch_newsletter.html
-    so it can be opened locally via the envelope's link.
-    Returns the file:// URL for that path.
+    Save the newsletter HTML as weekend.html in the current directory (the git repo),
+    then commit and push. Returns the public URL (GITHUB_PAGES_URL env var) if set,
+    otherwise the local file:// path as a fallback.
     """
     import pathlib
-    path = pathlib.Path.home() / "weekend_dispatch_newsletter.html"
+    import subprocess
+    path = pathlib.Path("weekend.html").resolve()
     path.write_text(html, encoding="utf-8")
+    subprocess.run(['git', 'config', 'user.email', 'actions@github.com'], check=False)
+    subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], check=False)
+    subprocess.run(
+        "git add weekend.html && git commit -m 'Weekend Dispatch update' && git push",
+        shell=True,
+        check=True,
+    )
+    github_pages_url = os.environ.get("GITHUB_PAGES_URL")
+    if github_pages_url:
+        return github_pages_url
     return f"file://{path}"
 
 
