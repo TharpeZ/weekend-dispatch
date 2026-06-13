@@ -1327,13 +1327,35 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
 
 def save_newsletter_html(html, saturday):
     """
-    Save the full newsletter HTML to ~/weekend_dispatch_newsletter.html
-    so it can be opened locally via the envelope's link.
-    Returns the file:// URL for that path.
+    Save newsletter as weekend.html in the current directory (git repo),
+    commit and push to GitHub, then return the GitHub Pages URL.
+    Falls back to local file:// URL if GITHUB_PAGES_URL not set.
     """
     import pathlib
-    path = pathlib.Path.home() / "weekend_dispatch_newsletter.html"
+    import subprocess
+
+    # Save to current working directory as weekend.html
+    path = pathlib.Path.cwd() / "weekend.html"
     path.write_text(html, encoding="utf-8")
+    print(f"  Newsletter saved: {path}")
+
+    # Git config for GitHub Actions environment
+    subprocess.run(["git", "config", "user.email", "actions@github.com"], check=False)
+    subprocess.run(["git", "config", "user.name", "GitHub Actions"], check=False)
+
+    # Commit and push
+    try:
+        subprocess.run(["git", "add", "weekend.html"], check=True)
+        subprocess.run(["git", "commit", "-m", "Weekend Dispatch update"], check=True)
+        subprocess.run(["git", "push"], check=True)
+        print("  Pushed weekend.html to GitHub")
+    except subprocess.CalledProcessError as e:
+        print(f"  Git push skipped or failed: {e}")
+
+    # Return GitHub Pages URL if set, otherwise local file path
+    pages_url = os.environ.get("GITHUB_PAGES_URL")
+    if pages_url:
+        return pages_url
     return f"file://{path}"
 
 
@@ -1623,26 +1645,31 @@ def build_envelope_email(saturday, sunday, newsletter_url):
   <div class="envelope">
 
     <!-- Flap rendered as folded-back SVG above the body -->
-    <svg class="flap-opened" viewBox="0 0 580 138" xmlns="http://www.w3.org/2000/svg">
-      <!-- flap folded back — mirrored vertically so it looks open -->
-      <polygon points="0,0 580,0 290,138" fill="#C4A46A" opacity="0.5"/>
-      <!-- flap face (now showing underside) slightly lighter -->
-      <polygon points="0,0 580,0 290,110" fill="#D4B98A"/>
-      <line x1="0" y1="0" x2="290" y2="110" stroke="#C4A46A" stroke-width="1" opacity="0.5"/>
-      <line x1="580" y1="0" x2="290" y2="110" stroke="#C4A46A" stroke-width="1" opacity="0.5"/>
+    <svg class="flap-opened" viewBox="0 0 580 100" xmlns="http://www.w3.org/2000/svg">
+      <polygon points="0,0 580,0 290,100" fill="#C4A46A" opacity="0.5"/>
+      <polygon points="0,0 580,0 290,80" fill="#D4B98A"/>
+      <line x1="0" y1="0" x2="290" y2="80" stroke="#C4A46A" stroke-width="1" opacity="0.5"/>
+      <line x1="580" y1="0" x2="290" y2="80" stroke="#C4A46A" stroke-width="1" opacity="0.5"/>
     </svg>
 
     <!-- Envelope body with fold geometry + content -->
-    <div class="env-body">
-      <svg class="folds" viewBox="0 0 580 274" xmlns="http://www.w3.org/2000/svg">
-        <polygon points="0,0 0,274 290,137" fill="#D8C9A8" opacity="0.65"/>
-        <polygon points="580,0 580,274 290,137" fill="#D8C9A8" opacity="0.65"/>
-        <polygon points="0,274 580,274 290,137" fill="#CEBA96" opacity="0.65"/>
-        <polygon points="0,0 580,0 290,137" fill="#EDE0C0" opacity="0.3"/>
+    <div class="env-body" style="position:relative;">
+      <!--
+        Body height: 200px at 580px wide = classic envelope ratio ~2.9:1
+        All four triangle tips meet at (290, 100) = center of body
+        Flap above = 100px, so total envelope = 300px
+        Center of whole envelope = 150px from top = 100px flap + 50px into body
+        Seal positioned at 100px into body = exact intersection of all fold lines
+      -->
+      <svg class="folds" viewBox="0 0 580 200" xmlns="http://www.w3.org/2000/svg">
+        <polygon points="0,0 0,200 290,100" fill="#D8C9A8" opacity="0.65"/>
+        <polygon points="580,0 580,200 290,100" fill="#D8C9A8" opacity="0.65"/>
+        <polygon points="0,200 580,200 290,100" fill="#CEBA96" opacity="0.65"/>
+        <polygon points="0,0 580,0 290,100" fill="#EDE0C0" opacity="0.3"/>
       </svg>
 
-      <!-- Seal — decorative center -->
-      <div class="env-seal-wrap">
+      <!-- Seal at exact center intersection of all four fold lines -->
+      <div style="position:absolute; top:100px; left:50%; transform:translate(-50%,-50%); z-index:3;">
         <div class="seal-circle">
           <span class="seal-text">W.D.</span>
         </div>
