@@ -1,0 +1,254 @@
+<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
+<style>
+  body { margin: 0; padding: 16px; background: #EDE0C0; }
+  .b4-wrap {
+    max-width: 600px;
+    margin: 0 auto;
+    background: #F5EDD8;
+    color: #1A1208;
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    border: 1px solid #D4B98A;
+    position: relative;
+    overflow: hidden;
+  }
+  .pigeons-global {
+    position: absolute;
+    inset: 0;
+    pointer-events: none;
+    z-index: 0;
+    width: 100%;
+    height: 100%;
+  }
+  .b4-header {
+    padding: 24px 32px 0;
+    background: #EDE0C0;
+    position: relative;
+  }
+  .b4-eyebrow {
+    font-family: 'Courier Prime', monospace;
+    font-size: 8.5px;
+    letter-spacing: 0.3em;
+    text-transform: uppercase;
+    color: #8A6A3A;
+    margin-bottom: 8px;
+    position: relative;
+    z-index: 1;
+    display: flex;
+    justify-content: space-between;
+  }
+  .b4-title-row {
+    display: flex;
+    align-items: flex-end;
+    justify-content: space-between;
+    gap: 20px;
+    position: relative;
+    z-index: 1;
+  }
+  .b4-title {
+    font-family: 'Cormorant Garamond', Georgia, serif;
+    font-weight: 300;
+    font-style: italic;
+    font-size: 58px;
+    line-height: 0.9;
+    color: #1A1208;
+    margin: 0;
+    letter-spacing: -0.01em;
+  }
+  .b4-title em { color: #9B3A1A; font-style: normal; }
+  .b4-date {
+    font-family: 'Courier Prime', monospace;
+    font-size: 9.5px;
+    letter-spacing: 0.14em;
+    color: #8A6A3A;
+    line-height: 1.9;
+    text-transform: uppercase;
+    text-align: right;
+    position: relative;
+    z-index: 1;
+  }
+  .b4-rule { width: 32px; height: 2px; background: #9B3A1A; margin: 10px 0 0; position: relative; z-index: 1; }
+  .b4-header-bottom-rule { height: 1px; background: #C4A46A; margin-top: 12px; position: relative; z-index: 1; }
+  .b4-body { padding: 0 32px 28px; position: relative; z-index: 1; }
+  .b4-section { padding: 20px 0 18px; border-bottom: 1px solid #D4B98A; }
+  .b4-section:last-child { border-bottom: none; }
+  .b4-label-row { display: flex; align-items: center; gap: 12px; margin-bottom: 14px; }
+  .b4-label { font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.26em; text-transform: uppercase; color: #9B3A1A; white-space: nowrap; }
+  .b4-label-rule { flex: 1; height: 1px; background: #D4B98A; }
+  .b4-label-roman { font-family: 'Cormorant Garamond', Georgia, serif; font-style: italic; font-size: 12px; color: #B89A5A; }
+  .b4-section p { font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16.5px; line-height: 1.72; color: #2A1E0A; margin: 0 0 12px; font-weight: 400; }
+  .b4-section p:last-child { margin-bottom: 0; }
+  .b4-section a { color: #9B3A1A; }
+  .news-feed { display: flex; flex-direction: column; gap: 0; }
+  .news-item { padding: 12px 0 12px 14px; border-left: 2px solid #9B3A1A; margin-bottom: 14px; }
+  .news-item:last-child { margin-bottom: 0; }
+  .news-source { font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #B89A5A; margin-bottom: 4px; }
+  .news-hed { font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 600; font-size: 15px; line-height: 1.3; color: #1A1208; margin-bottom: 5px; }
+  .news-hed a { color: #1A1208; text-decoration: none; border-bottom: 1px solid #D4B98A; }
+  .news-dek { font-family: 'Cormorant Garamond', Georgia, serif; font-style: italic; font-size: 13.5px; color: #6A5030; line-height: 1.55; }
+  .b4-footer {
+    background: #1A1208;
+    padding: 16px 32px;
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-end;
+    position: relative;
+    z-index: 1;
+  }
+  .b4-footer-left { display: flex; flex-direction: column; gap: 3px; }
+  .b4-footer-eyebrow { font-family: 'Courier Prime', monospace; font-size: 7.5px; letter-spacing: 0.16em; text-transform: uppercase; color: #9B8A5A; }
+  .b4-signature { font-family: 'Cormorant Garamond', Georgia, serif; font-style: italic; font-size: 20px; color: #D4B98A; line-height: 1; margin-top: 2px; }
+  .b4-tagline { font-family: 'Courier Prime', monospace; font-size: 7.5px; letter-spacing: 0.13em; text-transform: uppercase; color: #9B8A5A; margin-top: 2px; }
+</style>
+</head>
+<body>
+<div class="b4-wrap">
+
+  <svg class="pigeons-global" viewBox="0 0 600 1500" preserveAspectRatio="xMidYMid slice" xmlns="http://www.w3.org/2000/svg">
+    <defs>
+      <g id="pp">
+        <path d="M40 0 C44 8 46 14 40 18 C46 16 52 20 52 28 C52 36 44 42 32 42 C20 42 8 36 6 28 L0 36 L8 30 C4 28 2 22 6 16 C10 10 18 6 26 8 C28 4 34 -2 40 0Z" fill="#8A6A3A"/>
+        <path d="M34 2 L38 -2 L36 4Z" fill="#8A6A3A"/>
+        <circle cx="36" cy="4" r="2.5" fill="#F5EDD8" opacity="0.9"/>
+        <circle cx="36" cy="4" r="1.2" fill="#8A6A3A"/>
+        <path d="M10 26 Q22 22 36 26" stroke="#6A5030" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.7"/>
+        <path d="M11 30 Q23 26 37 30" stroke="#6A5030" stroke-width="1.2" fill="none" stroke-linecap="round" opacity="0.5"/>
+        <line x1="18" y1="42" x2="16" y2="52" stroke="#8A6A3A" stroke-width="2.2" stroke-linecap="round"/>
+        <line x1="26" y1="43" x2="24" y2="53" stroke="#8A6A3A" stroke-width="2.2" stroke-linecap="round"/>
+        <path d="M12 52 L16 52 L20 52" stroke="#8A6A3A" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M16 52 L16 56" stroke="#8A6A3A" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M20 53 L24 53 L28 53" stroke="#8A6A3A" stroke-width="1.8" stroke-linecap="round"/>
+        <path d="M24 53 L24 57" stroke="#8A6A3A" stroke-width="1.8" stroke-linecap="round"/>
+      </g>
+    </defs>
+    
+    <use href="#pp" transform="translate(30,30) scale(0.55)" opacity="0.08"/>
+    <use href="#pp" transform="translate(185,20) scale(0.45)" opacity="0.07"/>
+    <use href="#pp" transform="translate(360,35) scale(0.6)" opacity="0.08"/>
+    <use href="#pp" transform="translate(510,15) scale(0.5)" opacity="0.07"/>
+    <use href="#pp" transform="translate(80,185) scale(0.5)" opacity="0.07"/>
+    <use href="#pp" transform="translate(270,195) scale(0.55)" opacity="0.08"/>
+    <use href="#pp" transform="translate(450,180) scale(0.45)" opacity="0.07"/>
+    <use href="#pp" transform="translate(20,345) scale(0.6)" opacity="0.08"/>
+    <use href="#pp" transform="translate(200,355) scale(0.48)" opacity="0.07"/>
+    <use href="#pp" transform="translate(390,340) scale(0.55)" opacity="0.08"/>
+    <use href="#pp" transform="translate(530,360) scale(0.44)" opacity="0.07"/>
+    <use href="#pp" transform="translate(100,510) scale(0.52)" opacity="0.07"/>
+    <use href="#pp" transform="translate(310,520) scale(0.58)" opacity="0.08"/>
+    <use href="#pp" transform="translate(480,505) scale(0.46)" opacity="0.07"/>
+    <use href="#pp" transform="translate(40,665) scale(0.56)" opacity="0.08"/>
+    <use href="#pp" transform="translate(230,675) scale(0.5)" opacity="0.07"/>
+    <use href="#pp" transform="translate(430,660) scale(0.54)" opacity="0.08"/>
+    <use href="#pp" transform="translate(545,680) scale(0.42)" opacity="0.07"/>
+    <use href="#pp" transform="translate(120,825) scale(0.53)" opacity="0.07"/>
+    <use href="#pp" transform="translate(340,835) scale(0.57)" opacity="0.08"/>
+    <use href="#pp" transform="translate(510,820) scale(0.47)" opacity="0.07"/>
+    <use href="#pp" transform="translate(25,985) scale(0.58)" opacity="0.08"/>
+    <use href="#pp" transform="translate(200,995) scale(0.5)" opacity="0.07"/>
+    <use href="#pp" transform="translate(390,980) scale(0.55)" opacity="0.08"/>
+    <use href="#pp" transform="translate(540,1000) scale(0.44)" opacity="0.07"/>
+    <use href="#pp" transform="translate(85,1140) scale(0.52)" opacity="0.07"/>
+    <use href="#pp" transform="translate(290,1150) scale(0.56)" opacity="0.08"/>
+    <use href="#pp" transform="translate(470,1135) scale(0.48)" opacity="0.07"/>
+    <use href="#pp" transform="translate(35,1295) scale(0.54)" opacity="0.08"/>
+    <use href="#pp" transform="translate(215,1305) scale(0.5)" opacity="0.07"/>
+    <use href="#pp" transform="translate(415,1290) scale(0.57)" opacity="0.08"/>
+    <use href="#pp" transform="translate(545,1310) scale(0.43)" opacity="0.07"/>
+    <use href="#pp" transform="translate(100,1430) scale(0.5)" opacity="0.06"/>
+    <use href="#pp" transform="translate(310,1435) scale(0.46)" opacity="0.06"/>
+    <use href="#pp" transform="translate(490,1425) scale(0.52)" opacity="0.06"/>
+  </svg>
+
+  <div class="b4-header">
+    <div class="b4-eyebrow">
+      <span>Weekend Dispatch</span>
+      <span>Crown Heights &middot; Brooklyn</span>
+    </div>
+    <div class="b4-title-row">
+      <h1 class="b4-title">The<br><em>Week</em>end.</h1>
+      <div class="b4-date">
+        Saturday<br>June 13<br>&mdash;&mdash;<br>Sunday<br>June 14<br>2026
+      </div>
+    </div>
+    <div class="b4-rule"></div>
+    <div class="b4-header-bottom-rule"></div>
+  </div>
+
+  <div class="b4-body">
+    
+        <div class="b4-section">
+          <div class="b4-label-row">
+            <span class="b4-label">MTA This Weekend</span>
+            <div class="b4-label-rule"></div>
+            <span class="b4-label-roman">i.</span>
+          </div>
+          <p>No planned service changes for the A, C, or 3 this weekend.</p>
+        </div>
+        <div class="b4-section">
+          <div class="b4-label-row">
+            <span class="b4-label">Weather + Mabel</span>
+            <div class="b4-label-rule"></div>
+            <span class="b4-label-roman">ii.</span>
+          </div>
+          <p>Saturday's overcast and tolerable — 80°F at 10am, no rain — so your usual mid-morning departure with Mabel works fine. Sunday flips: heavy rain expected and a heat advisory kicks in by 10am with pavement hitting 118°F, so either get out early (before 9am) or wait until evening when it cools to 74°F around 7pm. Both evenings this weekend sit at a comfortable 74–80°F if you'd rather skip the morning scramble.</p>
+        </div>
+        <div class="b4-section">
+          <div class="b4-label-row">
+            <span class="b4-label">Grand Army Greenmarket</span>
+            <div class="b4-label-rule"></div>
+            <span class="b4-label-roman">iii.</span>
+          </div>
+          <p>Go. Saturday runs 8am–3pm with zero rain and an average of 84°F during market hours — overcast keeps it from feeling brutal. If plans change, the Brooklyn Public Library Central Branch at 560 New York Ave has air conditioning and a solid periodicals room.</p>
+        </div>
+        <div class="b4-section">
+          <div class="b4-label-row">
+            <span class="b4-label">Brooklyn Public Library</span>
+            <div class="b4-label-rule"></div>
+            <span class="b4-label-roman">iv.</span>
+          </div>
+          <p>Only one event fits your window and interests this week: <a href="https://www.eventbrite.com/e/atlantic-yards-101-tickets-1991694803773">Atlantic Yards 101</a>, Tuesday at 6:30pm at the Central Branch. Given your Jeremiah Moss affinity and Crown Heights proximity, a primer on the neighborhood's most contentious mega-development seems worth the walk. Nothing else in the current feed matches your literary or urban policy interests closely enough to justify the commute.</p>
+        </div>
+        <div class="b4-section">
+          <div class="b4-label-row">
+            <span class="b4-label">Around Brooklyn</span>
+            <div class="b4-label-rule"></div>
+            <span class="b4-label-roman">v.</span>
+          </div>
+          <div class="news-feed">
+          <div class="news-item">
+            <div class="news-source">Bushwick Daily</div>
+            <div class="news-hed"><a href="https://bushwickdaily.com/news/the-brooklyn-to-queens-train-that-skips-manhattan-is-finally-moving-the-live-question-is-whether-it-tunnels-under-metropolitan-avenue/">The Brooklyn-to-Queens train that skips Manhattan is finally moving</a></div>
+            <div class='news-dek'>The MTA's $5.5 billion Interborough Express light rail is advancing, and the live debate is whether it tunnels under Metropolitan Avenue — exactly the kind of civic infrastructure and neighborhood impact story you track.</div>
+          </div>
+          <div class="news-item">
+            <div class="news-source">Bushwick Daily</div>
+            <div class="news-hed"><a href="https://bushwickdaily.com/news/seven-people-keep-climbing-out-of-brooklyn-manholes-at-night-police-suspect-treasure-hunters-the-veteran-sewer-explorer-says-theres-no-treasure/">Seven people keep climbing out of Brooklyn manholes at night</a></div>
+            <div class='news-dek'>Police suspect treasure hunters, but a veteran sewer explorer says there's nothing down there — pure urban folklore meets municipal infrastructure, with a Delany-esque undertow.</div>
+          </div>
+          <div class="news-item">
+            <div class="news-source">Streetsblog NYC</div>
+            <div class="news-hed"><a href="https://nyc.streetsblog.org/2026/06/12/department-of-trucks-brooklynites-beg-for-relief-on-third-ave-as-safety-redesign-stalls">Brooklynites Beg for Relief on Third Ave. as Safety Redesign Stalls</a></div>
+            <div class='news-dek'>The city prioritizes truck routes while safety redesigns languish — another data point in Brooklyn's ongoing battle between development logistics and livable streets.</div>
+          </div>
+          <div class="news-item">
+            <div class="news-source">Bushwick Daily</div>
+            <div class="news-hed"><a href="https://bushwickdaily.com/news/a-judge-said-the-allegations-against-ice-in-a-bushwick-mans-arrest-appear-to-be-egregious-hes-still-detained-and-now-hes-suing/">A judge said the allegations against ICE in a Bushwick man's arrest 'appear to be egregious'</a></div>
+            <div class='news-dek'>He's still detained and now suing — the kind of investigative civic accountability story you'd find in Grann or Carreyrou, playing out in real time fifteen blocks east of you.</div>
+          </div></div>
+        </div>
+  </div>
+
+  <div class="b4-footer">
+    <div class="b4-footer-left">
+      <span class="b4-footer-eyebrow">Crown Heights &middot; Brooklyn, N.Y. &middot; 2026</span>
+      <span class="b4-signature">Zachary Tharpe</span>
+      <span class="b4-tagline">A personal dispatch &mdash; written by machines, curated by instinct.</span>
+    </div>
+  </div>
+
+</div>
+</body>
+</html>
