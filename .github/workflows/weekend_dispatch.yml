@@ -1,0 +1,29 @@
+name: Weekend Dispatch
+
+on:
+  schedule:
+    - cron: '0 13 * * 6'
+  workflow_dispatch:
+
+jobs:
+  send:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+
+      - name: Set up Python
+        uses: actions/setup-python@v4
+        with:
+          python-version: '3.11'
+
+      - name: Install dependencies
+        run: pip install anthropic requests beautifulsoup4 feedparser lxml
+
+      - name: Run weekend dispatch
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          DISPATCH_EMAIL: ${{ secrets.DISPATCH_EMAIL }}
+          DISPATCH_APP_PASSWORD: ${{ secrets.DISPATCH_APP_PASSWORD }}
+          DISPATCH_TO: ${{ secrets.DISPATCH_TO }}
+          GITHUB_PAGES_URL: https://tharpez.github.io/weekend-dispatch/weekend.html
+        run: python weekend_dispatch.py
