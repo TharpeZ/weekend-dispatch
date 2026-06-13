@@ -659,16 +659,25 @@ def fetch_bpl_events():
 
 # Slot 6: Bushwick Daily vs Bedford + Bowery — selected at runtime
 SLOT_6_FEEDS = {
-    "Bushwick Daily": "https://bushwickdaily.com/feed/",
+    "Bushwick Daily":   "https://bushwickdaily.com/feed/",
     "Bedford + Bowery": "https://bedfordandbowery.com/feed/",
 }
 
+# Feed priority tiers:
+# Tier 1 — Brooklyn-focused
+# Tier 2 — NYC-focused
+# Tier 3 — National/international failsafe
 NEWS_FEEDS = {
-    "Bklyner":          "https://bklyner.com/feed/",
+    # Tier 1: Brooklyn
     "Brooklyn Magazine": "https://brooklynmagazine.org/feed/",
-    "Gothamist":        "https://gothamist.com/feed",
-    "Hell Gate":        "https://hellgatenyc.com/feed",
-    "Streetsblog NYC":  "https://nyc.streetsblog.org/feed/",
+    "The City":          "https://thecity.nyc/feed",
+    "Streetsblog NYC":   "https://nyc.streetsblog.org/feed/",
+    # Tier 2: NYC
+    "Gothamist":         "https://gothamist.com/feed",
+    "Hyperallergic":     "https://hyperallergic.com/feed/",
+    "The Drift":         "https://thedriftmag.com/feed",
+    # Tier 3: National failsafe
+    "NPR":               "https://feeds.npr.org/1001/rss.xml",
 }
 
 # Keywords that strongly suggest Manhattan focus
@@ -692,45 +701,36 @@ BROOKLYN_KEYWORDS = [
 
 
 def _parse_rss(url, source_name, max_items=8):
-    """Fetch and parse an RSS feed. Returns list of item dicts."""
-    headers = {
-        "User-Agent": (
-            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
-        ),
-        "Accept": "application/rss+xml, application/xml, text/xml, */*",
-    }
+    """Fetch and parse an RSS or Atom feed. Follows redirects. Returns list of item dicts."""
     try:
-        r = requests.get(url, headers=headers, timeout=12)
-        if r.status_code != 200:
+        import feedparser as _fp
+        feed = _fp.parse(url)
+        # feedparser returns status 200/301/302 etc
+        status = getattr(feed, 'status', 200)
+        if status in (403, 404, 410):
             return []
-        soup = BeautifulSoup(r.content, "xml")
+        entries = feed.entries[:max_items]
         items = []
-        for item in soup.find_all("item")[:max_items]:
-            title = item.find("title")
-            link = item.find("link")
-            desc = item.find("description") or item.find("summary")
-            pub_date = item.find("pubDate") or item.find("published")
-            title_text = title.get_text(strip=True) if title else ""
-            link_text = link.get_text(strip=True) if link else ""
-            # Some feeds encode link as next sibling text node
-            if not link_text and link:
-                link_text = link.next_sibling or ""
-            desc_text = BeautifulSoup(
-                desc.get_text(strip=True) if desc else "", "html.parser"
-            ).get_text(strip=True)[:300]
-            date_text = pub_date.get_text(strip=True) if pub_date else ""
+        for entry in entries:
+            title_text = entry.get("title", "")
+            link_text  = entry.get("link", "")
+            # Try summary then content for description
+            desc_raw = entry.get("summary", "") or ""
+            if not desc_raw and entry.get("content"):
+                desc_raw = entry["content"][0].get("value", "")
+            desc_text = BeautifulSoup(desc_raw, "html.parser").get_text(strip=True)[:300]
+            date_text = entry.get("published", "")
 
             combined = f"{title_text} {desc_text}".lower()
             is_brooklyn = any(kw in combined for kw in BROOKLYN_KEYWORDS)
             is_manhattan = any(kw in combined for kw in MANHATTAN_KEYWORDS) and not is_brooklyn
 
             items.append({
-                "source": source_name,
-                "title": title_text,
-                "url": link_text.strip(),
-                "desc": desc_text,
-                "date": date_text,
+                "source":      source_name,
+                "title":       title_text,
+                "url":         link_text,
+                "desc":        desc_text,
+                "date":        date_text,
                 "is_brooklyn": is_brooklyn,
                 "is_manhattan": is_manhattan,
             })
@@ -766,7 +766,7 @@ def fetch_brooklyn_news():
     """
     results = {}
 
-    # Fetch the five confirmed feeds
+    # Fetch all tiered feeds
     for name, url in NEWS_FEEDS.items():
         items = _parse_rss(url, name)
         results[name] = items
@@ -879,10 +879,17 @@ def generate_narrative(
         return "\n".join(lines)
 
     news_sections = []
-    feed_order = ["Bklyner", "Brooklyn Magazine", "Gothamist", "Hell Gate",
-                  "Streetsblog NYC", slot6_winner]
+    # Priority order: Brooklyn → NYC → National failsafe → Slot 6
+    feed_order = [
+        # Tier 1: Brooklyn-focused
+        "Brooklyn Magazine", "The City", "Streetsblog NYC", slot6_winner,
+        # Tier 2: NYC-focused
+        "Gothamist", "Hyperallergic", "The Drift",
+        # Tier 3: National failsafe
+        "NPR",
+    ]
     for name in feed_order:
-        if name in brooklyn_news:
+        if name in brooklyn_news and brooklyn_news[name]:
             news_sections.append(fmt_feed(name, brooklyn_news[name]))
 
     news_text = "\n\n".join(news_sections)
@@ -965,18 +972,23 @@ BROOKLYN PUBLIC LIBRARY
 Up to 3 events matching his interests, applying timing rules. For each: event name, date, time, one sentence on why it's relevant, and a hyperlink formatted as HTML: <a href="URL">event name</a>. If no URL is available, omit the link. If nothing matches, say so honestly.
 
 AROUND BROOKLYN
-Surface 3–4 items across the six feeds that match his interests. Prioritize Brooklyn-tagged items.
+Surface 4–6 items across the feeds, grouped by source. Priority order:
+- Tier 1 (Brooklyn-focused): Brooklyn Magazine, The City, Streetsblog NYC, {slot6_winner}
+- Tier 2 (NYC-focused): Gothamist, Hyperallergic, The Drift
+- Tier 3 (National failsafe): NPR — only use if nothing relevant in Tiers 1 and 2
 
-CRITICAL FORMATTING RULE: Each item must be on its own line, clearly attributed. Use this exact format for each item:
+Prioritize Tier 1 sources. Only move to Tier 2 if Tier 1 has fewer than 2 relevant items. Only use NPR if both Tier 1 and Tier 2 are sparse.
 
-[SOURCE NAME] <a href="URL">Headline</a>
-One sentence on why it's worth his attention.
+CRITICAL FORMATTING RULE: Group all items from the same source together. Use this exact format:
 
-Example:
-[Hell Gate] <a href="https://hellgatenyc.com/example">The Gowanus Rezoning's First Cracks Are Showing</a>
-Three years in, the developers are doing what developers do.
+[SOURCE NAME]
+<a href="URL">Headline</a> — One sentence on why it's worth his attention.
+<a href="URL">Headline</a> — One sentence on why it's worth his attention.
 
-Write each item in the voice of The New Yorker's Goings On — terse, specific, a little editorial. Keep the [SOURCE NAME] tag exactly as shown so the email template can parse and style it.
+[SOURCE NAME]
+<a href="URL">Headline</a> — One sentence on why it's worth his attention.
+
+Write in the voice of The New Yorker's Goings On — terse, specific, a little editorial. Keep the [SOURCE NAME] tags exactly as shown so the email template can parse and style them. Only include sources that actually have relevant items.
 
 Write it as one cohesive email. Don't start with "Hello" or "Hi Zach." Just start with the first section label."""
 
@@ -1037,33 +1049,55 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
         content = parsed.get(key, "")
 
         if key == "AROUND BROOKLYN":
-            # Parse [SOURCE] tagged items into styled cards
-            items_html = ""
+            # Parse grouped [SOURCE] blocks into styled cards
             import re as _re
-            # Split on lines starting with [SOURCE]
-            raw_items = _re.split(r'\n(?=\[)', content.strip())
-            for raw in raw_items:
-                raw = raw.strip()
-                if not raw:
+            items_html = ""
+            # Split on lines that are just [SOURCE NAME]
+            source_blocks = _re.split(r'\n(?=\[[^\]]+\]\s*\n)', content.strip())
+            for block in source_blocks:
+                block = block.strip()
+                if not block:
                     continue
-                # Extract [SOURCE NAME] from start of item
-                source_match = _re.match(r'^\[([^\]]+)\]\s*(.*)', raw, _re.DOTALL)
+                # Extract source name from first line
+                source_match = _re.match(r'^\[([^\]]+)\]\s*\n(.*)', block, _re.DOTALL)
                 if source_match:
                     source = source_match.group(1).strip()
                     rest = source_match.group(2).strip()
-                    # Split headline (first line) from blurb (rest)
-                    lines = rest.split('\n', 1)
-                    headline_html = lines[0].strip()
-                    blurb = lines[1].strip() if len(lines) > 1 else ""
+                    # Each remaining line is a headline + blurb
+                    headline_lines = [l.strip() for l in rest.split('\n') if l.strip()]
+                    headlines_html = ""
+                    for hl in headline_lines:
+                        # Split on " — " to separate link from blurb
+                        parts = hl.split(' — ', 1)
+                        link_part = parts[0].strip()
+                        blurb = parts[1].strip() if len(parts) > 1 else ""
+                        headlines_html += f"""
+              <div class="news-headline-row">
+                <div class="news-hed">{link_part}</div>
+                {"<div class='news-dek'>" + blurb + "</div>" if blurb else ""}
+              </div>"""
                     items_html += f"""
+          <div class="news-item">
+            <div class="news-source">{source}</div>
+            {headlines_html}
+          </div>"""
+                else:
+                    # Fallback: try old single-line [SOURCE] format
+                    old_match = _re.match(r'^\[([^\]]+)\]\s*(.*)', block, _re.DOTALL)
+                    if old_match:
+                        source = old_match.group(1).strip()
+                        rest = old_match.group(2).strip()
+                        lines = rest.split('\n', 1)
+                        headline_html = lines[0].strip()
+                        blurb = lines[1].strip() if len(lines) > 1 else ""
+                        items_html += f"""
           <div class="news-item">
             <div class="news-source">{source}</div>
             <div class="news-hed">{headline_html}</div>
             {"<div class='news-dek'>" + blurb + "</div>" if blurb else ""}
           </div>"""
-                else:
-                    # Fallback: render as plain paragraph
-                    items_html += f"<p>{raw}</p>"
+                    else:
+                        items_html += f"<p>{block}</p>"
 
             html_sections += f"""
         <div class="b4-section">
@@ -1229,7 +1263,9 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
   .news-feed {{ display: flex; flex-direction: column; gap: 0; }}
   .news-item {{ padding: 12px 0 12px 14px; border-left: 2px solid #9B3A1A; margin-bottom: 14px; }}
   .news-item:last-child {{ margin-bottom: 0; }}
-  .news-source {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #B89A5A; margin-bottom: 4px; }}
+  .news-source {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #B89A5A; margin-bottom: 8px; }}
+  .news-headline-row {{ margin-bottom: 8px; }}
+  .news-headline-row:last-child {{ margin-bottom: 0; }}
   .news-hed {{ font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 600; font-size: 15px; line-height: 1.3; color: #1A1208; margin-bottom: 5px; }}
   .news-hed a {{ color: #1A1208; text-decoration: none; border-bottom: 1px solid #D4B98A; }}
   .news-dek {{ font-family: 'Cormorant Garamond', Georgia, serif; font-style: italic; font-size: 13.5px; color: #6A5030; line-height: 1.55; }}
@@ -1291,24 +1327,13 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
 
 def save_newsletter_html(html, saturday):
     """
-    Save the newsletter HTML as weekend.html in the current directory (the git repo),
-    then commit and push. Returns the public URL (GITHUB_PAGES_URL env var) if set,
-    otherwise the local file:// path as a fallback.
+    Save the full newsletter HTML to ~/weekend_dispatch_newsletter.html
+    so it can be opened locally via the envelope's link.
+    Returns the file:// URL for that path.
     """
     import pathlib
-    import subprocess
-    path = pathlib.Path("weekend.html").resolve()
+    path = pathlib.Path.home() / "weekend_dispatch_newsletter.html"
     path.write_text(html, encoding="utf-8")
-    subprocess.run(['git', 'config', 'user.email', 'actions@github.com'], check=False)
-    subprocess.run(['git', 'config', 'user.name', 'GitHub Actions'], check=False)
-    subprocess.run(
-        "git add weekend.html && git commit -m 'Weekend Dispatch update' && git push",
-        shell=True,
-        check=True,
-    )
-    github_pages_url = os.environ.get("GITHUB_PAGES_URL")
-    if github_pages_url:
-        return github_pages_url
     return f"file://{path}"
 
 
@@ -1324,18 +1349,22 @@ def build_envelope_email(saturday, sunday, newsletter_url):
     year      = saturday.year
 
     html = f"""<!DOCTYPE html>
-<html>
+<html lang="en" xmlns="http://www.w3.org/1999/xhtml">
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta name="color-scheme" content="light only">
+<meta name="supported-color-schemes" content="light only">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;1,300;1,400&family=Courier+Prime:wght@400;700&display=swap" rel="stylesheet">
 <style>
+  :root {{ color-scheme: light only; }}
   * {{ box-sizing: border-box; margin: 0; padding: 0; }}
   body {{
-    background: #2A1E0A;
-    margin: 0;
-    padding: 32px 16px;
-    font-family: 'Cormorant Garamond', Georgia, serif;
+    background: #2A1E0A !important;
+    margin: 0 !important;
+    padding: 32px 16px !important;
+    font-family: 'Cormorant Garamond', Georgia, serif !important;
+    -webkit-text-size-adjust: 100%;
   }}
   .scene {{
     max-width: 580px;
@@ -1356,13 +1385,30 @@ def build_envelope_email(saturday, sunday, newsletter_url):
 
   /* ── ENVELOPE (static, pre-opened) ── */
   .envelope {{
-    width: 100%;
-    position: relative;
-    background: #EDE0C0;
-    border: 1.5px solid #B89A5A;
-    border-radius: 2px;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.3);
-    overflow: visible;
+    width: 100% !important;
+    position: relative !important;
+    background: #EDE0C0 !important;
+    border: 1.5px solid #B89A5A !important;
+    border-radius: 2px !important;
+    box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.3) !important;
+    overflow: visible !important;
+  }}
+  /* Force light mode — prevent Gmail dark mode inversion */
+  [data-ogsc] .envelope {{ background: #EDE0C0 !important; }}
+  [data-ogsc] .newsletter-peek {{ background: #F5EDD8 !important; color: #1A1208 !important; }}
+  [data-ogsc] body {{ background: #2A1E0A !important; }}
+  [data-ogsc] .env-return {{ color: #7A5A28 !important; }}
+  [data-ogsc] .peek-text {{ color: #2A1E0A !important; }}
+  [data-ogsc] .peek-title {{ color: #1A1208 !important; }}
+  [data-ogsc] .cta-btn {{ background: #1A1208 !important; color: #F5EDD8 !important; }}
+  @media (prefers-color-scheme: dark) {{
+    .envelope {{ background: #EDE0C0 !important; }}
+    .newsletter-peek {{ background: #F5EDD8 !important; color: #1A1208 !important; }}
+    body {{ background: #2A1E0A !important; }}
+    .env-return {{ color: #7A5A28 !important; }}
+    .peek-text {{ color: #2A1E0A !important; }}
+    .peek-title {{ color: #1A1208 !important; }}
+    .cta-btn {{ background: #1A1208 !important; color: #F5EDD8 !important; }}
   }}
 
   /* Folded flap sits above — rotated back as if opened */
@@ -1484,13 +1530,13 @@ def build_envelope_email(saturday, sunday, newsletter_url):
 
   /* ── NEWSLETTER PEEK (always visible below envelope) ── */
   .newsletter-peek {{
-    width: calc(100% - 24px);
-    background: #F5EDD8;
-    border: 1px solid #D4B98A;
-    border-top: none;
-    padding: 20px 24px 20px;
-    position: relative;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.45);
+    width: calc(100% - 24px) !important;
+    background: #F5EDD8 !important;
+    border: 1px solid #D4B98A !important;
+    border-top: none !important;
+    padding: 20px 24px 20px !important;
+    position: relative !important;
+    box-shadow: 0 12px 40px rgba(0,0,0,0.45) !important;
   }}
 
   .peek-eyebrow {{
