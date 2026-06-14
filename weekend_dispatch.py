@@ -18,6 +18,13 @@ Changelog (June 2026):
     the outing window, not just the peak — a 2-hour round trip with a black
     mini labradoodle at 85°F+ average warrants caution even if no single
     hour hits 92°F. Sustained 90°F+ average is a no-go.
+  - NEW: fetch_surface_transit_alerts() watches the B65/B43 buses, the JFK
+    AirTrain (Jamaica + Howard Beach), and the Nostrand Av LIRR station.
+    These are surfaced in the MTA section ONLY when a service is cut, rerouted,
+    or suspended — otherwise they are omitted entirely and only train info shows.
+  - CHANGE: envelope email redrawn as a single realistic SVG (folded-back flap,
+    lit paper, pressed-wax seal, addressed "For Zachary Tharpe"); overall
+    envelope height reduced.
 """
 
 import os
@@ -449,6 +456,101 @@ def fetch_mta_rss_alerts():
         return []
 
 
+def fetch_surface_transit_alerts():
+    """
+    Conditional alerts for the B65 / B43 buses, the JFK AirTrain (Jamaica and
+    Howard Beach), and the Nostrand Avenue LIRR station.
+
+    These services are ONLY surfaced when they are disrupted — a planned
+    reroute, suspension, or service cut. If nothing matching is found, this
+    returns an empty list and the services are not mentioned in the dispatch
+    at all (per the "only if cut or altered" rule). Normal subway info is
+    handled separately by fetch_mta_alerts / fetch_mta_rss_alerts.
+
+    Returns a list of {"service": <label>, "text": <alert text>} dicts.
+    """
+    # Each watched service: a label plus the substrings that identify it.
+    WATCHED = [
+        ("B65 bus",            ["b65"]),
+        ("B43 bus",            ["b43"]),
+        ("JFK AirTrain (Jamaica)",     ["airtrain", "air train"]),
+        ("JFK AirTrain (Howard Beach)", ["airtrain", "air train"]),
+        ("Nostrand Av LIRR",   ["nostrand av", "nostrand avenue"]),
+    ]
+
+    # Words that indicate the service is actually CUT or ALTERED (keep these).
+    DISRUPTION_KEYWORDS = [
+        "reroute", "rerouted", "rerouting", "detour", "diverted", "diversion",
+        "suspended", "suspension", "no service", "not running", "will not run",
+        "cancelled", "canceled", "service change", "service cut", "cut",
+        "skipping", "will not stop", "won't stop", "bypass", "bypassing",
+        "replacement bus", "shuttle", "running via", "out of service",
+        "closed", "closure", "no trains", "no buses", "not stopping",
+    ]
+    # Real-time noise we explicitly ignore even if it mentions a service.
+    REALTIME_KEYWORDS = [
+        "delay", "delayed", "running late", "signal problem", "sick customer",
+        "police activity", "investigation", "smoke", "medical", "minor delays",
+    ]
+
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Safari/537.36"
+        )
+    }
+
+    found = []
+    seen = set()
+
+    for url in ["https://new.mta.info/alerts", "https://www.mta.info/alerts"]:
+        try:
+            r = requests.get(url, headers=headers, timeout=12)
+            if r.status_code != 200:
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            for el in soup.find_all(string=True):
+                text = el.strip()
+                if len(text) < 20:
+                    continue
+                low = text.lower()
+
+                # Must reference one of the watched services.
+                matched_service = None
+                for label, needles in WATCHED:
+                    if any(n in low for n in needles):
+                        # For AirTrain, require the right station context so a
+                        # generic AirTrain mention doesn't fire both entries.
+                        if "airtrain" in label.lower() or "air train" in low:
+                            if "jamaica" in label.lower() and "jamaica" not in low:
+                                continue
+                            if "howard beach" in label.lower() and "howard beach" not in low:
+                                continue
+                        matched_service = label
+                        break
+                if not matched_service:
+                    continue
+
+                # Must describe an actual cut/alteration, not a real-time delay.
+                if not any(kw in low for kw in DISRUPTION_KEYWORDS):
+                    continue
+                if any(kw in low for kw in REALTIME_KEYWORDS):
+                    continue
+
+                key = (matched_service, text[:120])
+                if key in seen:
+                    continue
+                seen.add(key)
+                found.append({"service": matched_service, "text": text[:300]})
+
+            if found:
+                break
+        except Exception:
+            continue
+
+    return found[:6]
+
+
 # ─────────────────────────────────────────────
 # FARMERS MARKET
 # ─────────────────────────────────────────────
@@ -817,6 +919,7 @@ def generate_narrative(
     saturday_data, sunday_data,
     sat_windows, sun_windows,
     mta_alerts, mta_rss,
+    surface_alerts,
     market_result, market_list,
     bpl_events,
     brooklyn_news,
@@ -832,6 +935,17 @@ def generate_narrative(
 
     # Combine MTA alert sources
     all_mta = list(dict.fromkeys(mta_alerts + mta_rss))
+
+    # Format surface-transit alerts (bus / AirTrain / LIRR). These are only
+    # present in the data when a service is actually cut or altered.
+    if surface_alerts:
+        surface_lines = "\n".join(
+            f"  - {a['service']}: {a['text']}" for a in surface_alerts
+        )
+    else:
+        surface_lines = ("NONE — no disruptions found for the B65, B43, JFK AirTrain "
+                         "(Jamaica/Howard Beach), or Nostrand Av LIRR. DO NOT MENTION "
+                         "these services at all.")
 
     # Format walk windows — include forced_early flag for Claude
     def fmt_windows(windows):
@@ -923,6 +1037,11 @@ Utica Avenue (A/C), Kingston Avenue (3), Crown Heights-Utica Avenue (3/4)
 Raw alert data found:
 {chr(10).join(all_mta) if all_mta else "No specific alerts found for these stations."}
 
+Additional surface-transit services (CONDITIONAL — mention ONLY if disrupted):
+B65 bus, B43 bus, JFK AirTrain (Jamaica and Howard Beach), Nostrand Av LIRR.
+Disruption data found for these services:
+{surface_lines}
+
 === FARMERS MARKET ===
 Grand Army Plaza Greenmarket verdict: {market_result['verdict']}
 Reason: {market_result['reason']}
@@ -960,7 +1079,9 @@ sci-fi, investigative journalism, bikes/surf/street culture, food, left politics
 Write the dispatch in five labeled sections:
 
 MTA THIS WEEKEND
-PLANNED SERVICE CHANGES ONLY. Ignore real-time delays, signal problems, and incidents — those are not in the data. If the alerts data contains planned reroutes, skip-stop patterns, suspended service, or route changes for the A, C, or 3 lines, translate them into plain English: which line, which stations affected, which direction, and what to do instead. If no planned changes are found, say exactly: "No planned service changes for the A, C, or 3 this weekend."
+PLANNED SERVICE CHANGES ONLY. Ignore real-time delays, signal problems, and incidents — those are not in the data. If the alerts data contains planned reroutes, skip-stop patterns, suspended service, or route changes for the A, C, or 3 lines, translate them into plain English: which line, which stations affected, which direction, and what to do instead. If no planned changes are found for the subway, say exactly: "No planned service changes for the A, C, or 3 this weekend."
+
+Then, regarding the B65 bus, B43 bus, JFK AirTrain (Jamaica/Howard Beach), and Nostrand Av LIRR: these are CONDITIONAL. Mention a service ONLY if the "Disruption data found" block above contains an actual reroute, suspension, or service cut for it. If that block says NONE, or a given service is not listed there, do NOT mention that service at all — say nothing about the buses, AirTrain, or LIRR. When a disruption IS present, add a brief plain-English line for it (which service, what changed, what to do instead) after the subway info.
 
 WEATHER + MABEL
 2–3 sentences covering both days. Zach's default is leaving home between 10am and noon on weekends — he is not getting up at 6am unless forced. Work from that assumption. If the walk window data shows [RAIN FORCES EARLIER START], acknowledge that plainly and tell him rain is arriving mid-morning so he'll need to move if he wants to get Mabel out dry. If the 10am–noon window is just hot (not rainy), tell him what to expect at that hour and how to manage it with Mabel. Always include the evening window as a second option. Be specific about Saturday vs Sunday if they differ.
@@ -1389,7 +1510,7 @@ def build_envelope_email(saturday, sunday, newsletter_url):
     -webkit-text-size-adjust: 100%;
   }}
   .scene {{
-    max-width: 580px;
+    max-width: 620px;
     margin: 0 auto;
     display: flex;
     flex-direction: column;
@@ -1402,163 +1523,42 @@ def build_envelope_email(saturday, sunday, newsletter_url):
     text-transform: uppercase;
     color: #6A5030;
     text-align: center;
-    margin-bottom: 20px;
+    margin-bottom: 22px;
   }}
 
-  /* ── ENVELOPE (static, pre-opened) ── */
-  .envelope {{
+  /* ── ENVELOPE (realistic, pre-opened, single SVG) ── */
+  .env-wrap {{
     width: 100% !important;
-    position: relative !important;
-    background: #EDE0C0 !important;
-    border: 1.5px solid #B89A5A !important;
-    border-radius: 2px !important;
-    box-shadow: 0 10px 40px rgba(0,0,0,0.6), 0 2px 8px rgba(0,0,0,0.3) !important;
-    overflow: visible !important;
+    filter: drop-shadow(0 22px 38px rgba(40,28,10,0.42)) drop-shadow(0 4px 10px rgba(40,28,10,0.3));
   }}
-  /* Force light mode — prevent Gmail dark mode inversion */
-  [data-ogsc] .envelope {{ background: #EDE0C0 !important; }}
-  [data-ogsc] .newsletter-peek {{ background: #F5EDD8 !important; color: #1A1208 !important; }}
-  [data-ogsc] body {{ background: #2A1E0A !important; }}
-  [data-ogsc] .env-return {{ color: #7A5A28 !important; }}
-  [data-ogsc] .peek-text {{ color: #2A1E0A !important; }}
-  [data-ogsc] .peek-title {{ color: #1A1208 !important; }}
-  [data-ogsc] .cta-btn {{ background: #1A1208 !important; color: #F5EDD8 !important; }}
-  @media (prefers-color-scheme: dark) {{
-    .envelope {{ background: #EDE0C0 !important; }}
-    .newsletter-peek {{ background: #F5EDD8 !important; color: #1A1208 !important; }}
-    body {{ background: #2A1E0A !important; }}
-    .env-return {{ color: #7A5A28 !important; }}
-    .peek-text {{ color: #2A1E0A !important; }}
-    .peek-title {{ color: #1A1208 !important; }}
-    .cta-btn {{ background: #1A1208 !important; color: #F5EDD8 !important; }}
-  }}
-
-  /* Folded flap sits above — rotated back as if opened */
-  .flap-opened {{
-    width: 100%;
-    display: block;
-    margin-bottom: -2px;
-  }}
-
-  /* Body of envelope */
-  .env-body {{
-    position: relative;
-    overflow: hidden;
-  }}
-
-  /* Fold triangles */
-  .folds {{
-    display: block;
-    width: 100%;
-  }}
-
-  /* Content overlaid on top of fold geometry */
-  .env-content {{
-    position: absolute;
-    inset: 0;
-    display: flex;
-    flex-direction: column;
-    padding: 16px 24px;
-  }}
-
-  .env-top {{
-    display: flex;
-    justify-content: space-between;
-    align-items: flex-start;
-    width: 100%;
-  }}
-
-  .env-return {{
-    font-family: 'Courier Prime', monospace;
-    font-size: 8.5px;
-    letter-spacing: 0.12em;
-    text-transform: uppercase;
-    color: #7A5A28;
-    line-height: 1.9;
-  }}
-
-  .env-stamps {{
-    display: flex;
-    align-items: flex-start;
-    gap: 8px;
-  }}
-
-  .env-postmark {{
-    opacity: 0.38;
-    transform: rotate(-10deg);
-    margin-top: 4px;
-  }}
-
-  .env-stamp {{
-    width: 50px;
-    height: 60px;
-    background: #F5EDD8;
-    border: 1px solid #C4A46A;
-    display: inline-flex;
-    flex-direction: column;
-    align-items: center;
-    justify-content: center;
-    gap: 3px;
-    position: relative;
-  }}
-
-  .stamp-label {{
-    font-family: 'Courier Prime', monospace;
-    font-size: 5.5px;
-    letter-spacing: 0.15em;
-    text-transform: uppercase;
-    color: #8A6A3A;
-  }}
-
-  /* Seal — decorative, centered, lower half */
-  .env-seal-wrap {{
-    position: absolute;
-    bottom: 14%;
-    left: 50%;
-    transform: translateX(-50%);
-    text-align: center;
-  }}
-
-  .seal-circle {{
-    width: 52px;
-    height: 52px;
-    background: #9B3A1A;
-    border-radius: 50%;
-    display: inline-flex;
-    align-items: center;
-    justify-content: center;
-    box-shadow: 0 4px 14px rgba(0,0,0,0.5);
-    border: 1px solid rgba(0,0,0,0.2);
-  }}
-
-  .seal-text {{
-    font-family: 'Cormorant Garamond', Georgia, serif;
-    font-style: italic;
-    font-size: 16px;
-    color: #F5EDD8;
-    letter-spacing: 0.03em;
-  }}
-
-  /* Address — lower portion */
-  .env-address {{
-    position: absolute;
-    bottom: 12%;
-    left: 0; right: 0;
-    text-align: center;
-    padding-bottom: 0;
-    /* pushed below seal */
-    display: none;
+  .env-svg {{
+    width: 100% !important;
+    display: block !important;
   }}
 
   /* ── NEWSLETTER PEEK (always visible below envelope) ── */
   .newsletter-peek {{
-    width: calc(100% - 24px) !important;
-    background: #F5EDD8 !important;
+    width: calc(100% - 48px) !important;
+    background: #F7F0DC !important;
     border: 1px solid #D4B98A !important;
     border-top: none !important;
-    padding: 20px 24px 20px !important;
+    padding: 22px 26px !important;
+    margin-top: -4px !important;
     position: relative !important;
-    box-shadow: 0 12px 40px rgba(0,0,0,0.45) !important;
+    box-shadow: 0 14px 36px rgba(0,0,0,0.32) !important;
+  }}
+  /* Force light mode — prevent Gmail dark mode inversion */
+  [data-ogsc] .newsletter-peek {{ background: #F7F0DC !important; color: #1A1208 !important; }}
+  [data-ogsc] body {{ background: #2A1E0A !important; }}
+  [data-ogsc] .peek-text {{ color: #2A1E0A !important; }}
+  [data-ogsc] .peek-title {{ color: #1A1208 !important; }}
+  [data-ogsc] .cta-btn {{ background: #1A1208 !important; color: #F5EDD8 !important; }}
+  @media (prefers-color-scheme: dark) {{
+    .newsletter-peek {{ background: #F7F0DC !important; color: #1A1208 !important; }}
+    body {{ background: #2A1E0A !important; }}
+    .peek-text {{ color: #2A1E0A !important; }}
+    .peek-title {{ color: #1A1208 !important; }}
+    .cta-btn {{ background: #1A1208 !important; color: #F5EDD8 !important; }}
   }}
 
   .peek-eyebrow {{
@@ -1576,7 +1576,7 @@ def build_envelope_email(saturday, sunday, newsletter_url):
     font-family: 'Cormorant Garamond', Georgia, serif;
     font-weight: 300;
     font-style: italic;
-    font-size: 42px;
+    font-size: 44px;
     line-height: 0.88;
     color: #1A1208;
     margin-bottom: 12px;
@@ -1600,12 +1600,6 @@ def build_envelope_email(saturday, sunday, newsletter_url):
     line-height: 1.7;
     color: #2A1E0A;
     margin-bottom: 16px;
-  }}
-
-  .peek-divider {{
-    height: 1px;
-    background: #E2CFA0;
-    margin: 16px 0;
   }}
 
   /* CTA button */
@@ -1634,7 +1628,7 @@ def build_envelope_email(saturday, sunday, newsletter_url):
     text-transform: uppercase;
     color: #3A2A10;
     text-align: center;
-    margin-top: 20px;
+    margin-top: 22px;
   }}
 </style>
 </head>
@@ -1642,72 +1636,118 @@ def build_envelope_email(saturday, sunday, newsletter_url):
 <div class="scene">
   <div class="pre-label">Your weekend dispatch has arrived</div>
 
-  <div class="envelope">
+  <!-- Realistic envelope: single SVG. Flap folded back above body;
+       side + bottom panels fold to center; pressed wax seal at junction. -->
+  <div class="env-wrap">
+    <svg class="env-svg" viewBox="0 0 620 400" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="paper" x1="0" y1="0" x2="0.35" y2="1">
+          <stop offset="0" stop-color="#F4E9CD"/>
+          <stop offset="0.5" stop-color="#ECDFBE"/>
+          <stop offset="1" stop-color="#E2D2AC"/>
+        </linearGradient>
+        <linearGradient id="sideL" x1="0" y1="0" x2="1" y2="0.4">
+          <stop offset="0" stop-color="#E6D7B2"/><stop offset="1" stop-color="#D2C098"/>
+        </linearGradient>
+        <linearGradient id="sideR" x1="1" y1="0" x2="0" y2="0.4">
+          <stop offset="0" stop-color="#E6D7B2"/><stop offset="1" stop-color="#D2C098"/>
+        </linearGradient>
+        <linearGradient id="bottomP" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#D8C7A0"/><stop offset="1" stop-color="#E0D0AA"/>
+        </linearGradient>
+        <linearGradient id="flap" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#F6ECD2"/><stop offset="1" stop-color="#E4D4AE"/>
+        </linearGradient>
+        <linearGradient id="flapShadow" x1="0" y1="0" x2="0" y2="1">
+          <stop offset="0" stop-color="#B49A66" stop-opacity="0.55"/>
+          <stop offset="1" stop-color="#B49A66" stop-opacity="0"/>
+        </linearGradient>
+        <radialGradient id="waxBody" cx="0.36" cy="0.30" r="0.85">
+          <stop offset="0" stop-color="#C75732"/>
+          <stop offset="0.4" stop-color="#A23F1D"/>
+          <stop offset="0.78" stop-color="#822F13"/>
+          <stop offset="1" stop-color="#5E200B"/>
+        </radialGradient>
+        <radialGradient id="waxDish" cx="0.5" cy="0.42" r="0.6">
+          <stop offset="0" stop-color="#6A2710" stop-opacity="0.55"/>
+          <stop offset="0.6" stop-color="#6A2710" stop-opacity="0.12"/>
+          <stop offset="1" stop-color="#6A2710" stop-opacity="0"/>
+        </radialGradient>
+        <radialGradient id="waxRim" cx="0.5" cy="0.5" r="0.5">
+          <stop offset="0.74" stop-color="#000000" stop-opacity="0"/>
+          <stop offset="0.93" stop-color="#5A1F0A" stop-opacity="0.5"/>
+          <stop offset="1" stop-color="#3E1305" stop-opacity="0.65"/>
+        </radialGradient>
+        <filter id="sealShadow" x="-40%" y="-40%" width="180%" height="180%">
+          <feGaussianBlur in="SourceAlpha" stdDeviation="4"/>
+          <feOffset dx="0" dy="4" result="o"/>
+          <feComponentTransfer><feFuncA type="linear" slope="0.45"/></feComponentTransfer>
+          <feMerge><feMergeNode/><feMergeNode in="SourceGraphic"/></feMerge>
+        </filter>
+      </defs>
 
-    <!-- Flap rendered as folded-back SVG above the body -->
-    <svg class="flap-opened" viewBox="0 0 580 100" xmlns="http://www.w3.org/2000/svg">
-      <polygon points="0,0 580,0 290,100" fill="#C4A46A" opacity="0.5"/>
-      <polygon points="0,0 580,0 290,80" fill="#D4B98A"/>
-      <line x1="0" y1="0" x2="290" y2="80" stroke="#C4A46A" stroke-width="1" opacity="0.5"/>
-      <line x1="580" y1="0" x2="290" y2="80" stroke="#C4A46A" stroke-width="1" opacity="0.5"/>
+      <!-- ENVELOPE BODY -->
+      <rect x="6" y="74" width="608" height="318" rx="7" fill="url(#paper)" stroke="#C2A668" stroke-width="1.5"/>
+
+      <!-- side + bottom folds meet at center (310,224) -->
+      <polygon points="6,76 6,390 310,224" fill="url(#sideL)" opacity="0.92"/>
+      <polygon points="614,76 614,390 310,224" fill="url(#sideR)" opacity="0.92"/>
+      <polygon points="6,390 614,390 310,224" fill="url(#bottomP)" opacity="0.95"/>
+      <line x1="6" y1="76" x2="310" y2="224" stroke="#BBA269" stroke-width="1" opacity="0.5"/>
+      <line x1="614" y1="76" x2="310" y2="224" stroke="#BBA269" stroke-width="1" opacity="0.5"/>
+      <line x1="6" y1="390" x2="310" y2="224" stroke="#B59C61" stroke-width="1" opacity="0.55"/>
+      <line x1="614" y1="390" x2="310" y2="224" stroke="#B59C61" stroke-width="1" opacity="0.55"/>
+
+      <!-- shadow the open flap casts onto the body top -->
+      <rect x="7" y="75" width="606" height="66" fill="url(#flapShadow)" opacity="0.8"/>
+
+      <!-- OPEN FLAP (folded back, above the top edge) -->
+      <polygon points="6,76 614,76 310,4" fill="url(#flap)" stroke="#C2A668" stroke-width="1.5"/>
+      <polygon points="6,76 614,76 310,24" fill="#D8C9A2" opacity="0.4"/>
+      <line x1="6" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
+      <line x1="614" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
+
+      <!-- RETURN ADDRESS (aligned with stamp band) -->
+      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#7A5A28">13 REVERE PL</text>
+      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#7A5A28">CROWN HEIGHTS, BROOKLYN</text>
+      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#7A5A28">NEW YORK, N.Y. 11213</text>
+
+      <!-- POSTMARK -->
+      <g transform="translate(486,184) rotate(-10)" opacity="0.4">
+        <circle cx="23" cy="23" r="21" stroke="#6A5030" stroke-width="2" fill="none"/>
+        <text x="23" y="16" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">CROWN</text>
+        <text x="23" y="23" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">HEIGHTS</text>
+        <text x="23" y="30" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">NY</text>
+        <text x="23" y="37" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">{sat_label}</text>
+      </g>
+
+      <!-- STAMP -->
+      <g transform="translate(548,178)">
+        <rect x="0" y="0" width="52" height="62" fill="#F7F0DC" stroke="#C4A46A" stroke-width="1"/>
+        <g transform="translate(2,6)" opacity="0.8">
+          <path d="M40 0 C44 8 46 14 40 18 C46 16 52 20 52 28 C52 36 44 42 32 42 C20 42 8 36 6 28 L0 36 L8 30 C4 28 2 22 6 16 C10 10 18 6 26 8 C28 4 34 -2 40 0Z" fill="#8A6A3A"/>
+          <circle cx="36" cy="4" r="2.5" fill="#F7F0DC" opacity="0.9"/>
+          <circle cx="36" cy="4" r="1.2" fill="#8A6A3A"/>
+          <path d="M10 26 Q22 22 36 26" stroke="#6A5030" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.7"/>
+        </g>
+        <text x="26" y="56" font-family="'Courier Prime', monospace" font-size="6" fill="#8A6A3A" text-anchor="middle" letter-spacing="1.2">BROOKLYN</text>
+      </g>
+
+      <!-- ADDRESSEE -->
+      <text x="310" y="362" font-family="'Cormorant Garamond', Georgia, serif" font-style="italic" font-size="21" fill="#5C4422" text-anchor="middle" letter-spacing="1.5">For Zachary Tharpe</text>
+
+      <!-- PRESSED WAX SEAL (center over fold junction) -->
+      <g filter="url(#sealShadow)">
+        <path d="M310 184 C322 183 331 188 337 191 C345 188 351 192 352 199 C361 201 365 208 362 215 C368 221 367 230 360 234 C362 242 356 249 348 248 C345 256 336 259 328 255 C321 261 311 261 305 256 C297 261 287 258 284 250 C275 251 268 244 270 236 C263 232 261 222 267 217 C262 209 267 200 275 199 C276 191 284 186 292 188 C297 183 304 183 310 184 Z" fill="url(#waxBody)" stroke="#5E200B" stroke-width="1" stroke-opacity="0.4"/>
+        <circle cx="313" cy="222" r="36" fill="url(#waxRim)"/>
+        <circle cx="313" cy="222" r="27" fill="none" stroke="#5A2310" stroke-width="2" opacity="0.45"/>
+        <circle cx="313" cy="222" r="27" fill="none" stroke="#E08A60" stroke-width="0.8" opacity="0.3" transform="translate(-1,-1)"/>
+        <circle cx="313" cy="222" r="25" fill="url(#waxDish)"/>
+        <ellipse cx="298" cy="204" rx="11" ry="6" fill="#E8916B" opacity="0.45" transform="rotate(-28 298 204)"/>
+        <text x="314.5" y="231" font-family="'Cormorant Garamond', Georgia, serif" font-style="italic" font-size="22" fill="#4A1A08" opacity="0.6" text-anchor="middle">W.D.</text>
+        <text x="313" y="229.5" font-family="'Cormorant Garamond', Georgia, serif" font-style="italic" font-size="22" fill="#E9B89C" text-anchor="middle">W.D.</text>
+      </g>
     </svg>
-
-    <!-- Envelope body with fold geometry + content -->
-    <div class="env-body" style="position:relative;">
-      <!--
-        Body height: 200px at 580px wide = classic envelope ratio ~2.9:1
-        All four triangle tips meet at (290, 100) = center of body
-        Flap above = 100px, so total envelope = 300px
-        Center of whole envelope = 150px from top = 100px flap + 50px into body
-        Seal positioned at 100px into body = exact intersection of all fold lines
-      -->
-      <svg class="folds" viewBox="0 0 580 200" xmlns="http://www.w3.org/2000/svg">
-        <polygon points="0,0 0,200 290,100" fill="#D8C9A8" opacity="0.65"/>
-        <polygon points="580,0 580,200 290,100" fill="#D8C9A8" opacity="0.65"/>
-        <polygon points="0,200 580,200 290,100" fill="#CEBA96" opacity="0.65"/>
-        <polygon points="0,0 580,0 290,100" fill="#EDE0C0" opacity="0.3"/>
-      </svg>
-
-      <!-- Seal at exact center intersection of all four fold lines -->
-      <div style="position:absolute; top:100px; left:50%; transform:translate(-50%,-50%); z-index:3;">
-        <div class="seal-circle">
-          <span class="seal-text">W.D.</span>
-        </div>
-      </div>
-
-      <!-- Content layer -->
-      <div class="env-content">
-        <div class="env-top">
-          <div class="env-return">
-            13 Revere Pl<br>
-            Crown Heights, Brooklyn<br>
-            New York, N.Y. 11213
-          </div>
-          <div class="env-stamps">
-            <div class="env-postmark">
-              <svg width="46" height="46" viewBox="0 0 46 46" fill="none" xmlns="http://www.w3.org/2000/svg">
-                <circle cx="23" cy="23" r="21" stroke="#6A5030" stroke-width="2" fill="none"/>
-                <text x="23" y="16" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">CROWN</text>
-                <text x="23" y="23" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">HEIGHTS</text>
-                <text x="23" y="30" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">NY</text>
-                <text x="23" y="37" font-family="monospace" font-size="5" fill="#6A5030" text-anchor="middle" letter-spacing="1">{sat_label}</text>
-              </svg>
-            </div>
-            <div class="env-stamp">
-              <svg width="28" height="26" viewBox="0 0 52 48" fill="none" opacity="0.75">
-                <path d="M40 0 C44 8 46 14 40 18 C46 16 52 20 52 28 C52 36 44 42 32 42 C20 42 8 36 6 28 L0 36 L8 30 C4 28 2 22 6 16 C10 10 18 6 26 8 C28 4 34 -2 40 0Z" fill="#8A6A3A"/>
-                <circle cx="36" cy="4" r="2.5" fill="#F5EDD8" opacity="0.9"/>
-                <circle cx="36" cy="4" r="1.2" fill="#8A6A3A"/>
-                <path d="M10 26 Q22 22 36 26" stroke="#6A5030" stroke-width="1.8" fill="none" stroke-linecap="round" opacity="0.7"/>
-                <line x1="18" y1="42" x2="16" y2="52" stroke="#8A6A3A" stroke-width="2.2" stroke-linecap="round"/>
-                <line x1="26" y1="43" x2="24" y2="53" stroke="#8A6A3A" stroke-width="2.2" stroke-linecap="round"/>
-              </svg>
-              <span class="stamp-label">Brooklyn</span>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
   </div>
 
   <!-- Newsletter peek — always visible -->
@@ -1792,6 +1832,12 @@ def main():
     print("Fetching MTA alerts...")
     mta_alerts = fetch_mta_alerts()
     mta_rss = fetch_mta_rss_alerts()
+    surface_alerts = fetch_surface_transit_alerts()
+    if surface_alerts:
+        print(f"  Surface-transit disruptions: "
+              f"{', '.join(sorted({a['service'] for a in surface_alerts}))}")
+    else:
+        print("  No B65/B43/AirTrain/LIRR disruptions — services omitted")
 
     # 4. Farmers market
     print("Fetching market data...")
@@ -1814,6 +1860,7 @@ def main():
         saturday_data, sunday_data,
         sat_windows, sun_windows,
         mta_alerts, mta_rss,
+        surface_alerts,
         market_result, market_list,
         bpl_events,
         brooklyn_news,
