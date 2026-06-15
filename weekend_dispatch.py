@@ -52,14 +52,38 @@ CORRIDORS = {
     "Albany Ave (N-S)":           {"azimuth": 10,  "canopy": 0.42},
 }
 
-# MTA stations to watch
-MTA_STATIONS = [
-    "Kingston-Throop Avenues",   # C
-    "Nostrand Avenue",           # A/C
-    "Utica Avenue",              # A/C and 3/4
-    "Kingston Avenue",           # 3
-    "Crown Heights-Utica Avenue",# 3/4
-]
+# MTA — lines and home stations to watch.
+#
+# We pull EVERY current service alert on the A, C, and 3 lines system-wide
+# (see fetch_mta_alerts), then split them by informed entity into alerts that
+# touch one of these five home stops vs. alerts elsewhere on the line.
+#
+# HOME_STOPS maps GTFS stop_id -> station label. The stop_ids were pulled from
+# the MTA static feed's stops.txt (parent_station rows, location_type=1), NOT
+# from memory — verify each by eye against the station it names:
+#   A47 = Kingston-Throop Avs (C)        — IND Fulton St Line
+#   A46 = Nostrand Av (A/C)              — IND Fulton St Line
+#   A48 = Utica Av (A/C)                 — IND Fulton St Line
+#   249 = Kingston Av (3)                — IRT Eastern Pkwy Line
+#   250 = Crown Hts-Utica Av (3/4)       — IRT Eastern Pkwy Line
+# (The camsys alerts feed references stops by these parent ids, no N/S suffix.)
+HOME_STOPS = {
+    "A47": "Kingston–Throop Avs (C)",
+    "A46": "Nostrand Av (A/C)",
+    "A48": "Utica Av (A/C)",
+    "249": "Kingston Av (3)",
+    "250": "Crown Hts–Utica Av (3/4)",
+}
+
+# Routes we care about. GTFS route_id is the bare line letter/number.
+HOME_LINES = ["A", "C", "3"]
+
+# GTFS-realtime Service Alerts, JSON flavor (no API key). Each alert carries an
+# informed_entity[] list with route_id and/or stop_id, which is what lets us
+# group alerts by line vs. specific stop.
+MTA_ALERTS_FEED = (
+    "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts.json"
+)
 
 # BPL Central Branch
 BPL_EVENTS_URL = "https://www.bklynlibrary.org/events"
@@ -336,35 +360,117 @@ def get_walk_windows(day_data, day_label):
 # MTA SERVICE ALERTS
 # ─────────────────────────────────────────────
 
-def fetch_mta_alerts():
+def _gtfs_translated_text(field):
     """
-    Pull MTA PLANNED service change alerts only — reroutes, skip-stop patterns,
-    suspended service, express/local changes. Filters out real-time delays,
-    signal problems, and general advisories.
-    Focuses on A, C, and 3 lines and their Crown Heights stations.
+    Pull plain text out of a GTFS-realtime TranslatedString:
+    {"translation": [{"text": ..., "language": "en"}, ...]}.
+    Prefer English; fall back to the first translation. Returns "" if empty.
     """
-    TARGET_LINES = ["a train", "c train", "3 train", "4 train",
-                    "a/c", "a and c", "c and a", "3/4", "3 and 4"]
-    TARGET_STATIONS = [
-        "kingston-throop", "kingston throop", "nostrand", "utica",
-        "kingston ave", "crown heights", "throop", "bedford-nostrand",
-        "hoyt-schermerhorn", "jay street", "fulton street",
-    ]
-    # Words that indicate PLANNED changes (keep these)
-    PLANNED_KEYWORDS = [
-        "planned", "scheduled", "reroute", "rerouted", "skip", "skipping",
-        "will not stop", "won't stop", "bypass", "bypassing", "suspended",
-        "shuttle", "replacement bus", "running via", "diverted", "diversion",
-        "alternate", "alternating", "extended", "shortened", "weekend service",
-        "no service", "suspended between", "running express",
-    ]
-    # Words that indicate real-time incidents (filter these OUT)
-    REALTIME_KEYWORDS = [
-        "delay", "delayed", "signal problem", "signal issue", "sick customer",
-        "police activity", "investigation", "smoke", "fire department",
-        "medical emergency", "offloading", "switch problem",
-    ]
+    translations = (field or {}).get("translation", []) or []
+    for t in translations:
+        if (t.get("language") or "").lower().startswith("en"):
+            return (t.get("text") or "").strip()
+    return (translations[0].get("text") or "").strip() if translations else ""
 
+
+# Mercury alert_type buckets. The feed's GTFS cause/effect are empty, so the
+# planned-vs-realtime split keys off transit_realtime.mercury_alert.alert_type.
+# Planned changes use a "Planned - ..." prefix (Reroute, Part Suspended, Stops
+# Skipped, Express to Local, etc.); transient incidents are typed "Delays".
+REALTIME_ALERT_TYPES = {"Delays"}
+# Text backstop for transient incidents whose alert_type is missing/odd. These
+# are the real-time delay/signal-problem markers we drop; planned reroutes,
+# suspensions, skip-stops, and express patterns never contain them.
+REALTIME_KEYWORDS = [
+    "delay", "delayed", "signal problem", "signal issue", "sick customer",
+    "police activity", "investigation", "smoke", "fire department",
+    "medical", "offloading", "switch problem", "rail condition", "track fire",
+]
+
+
+def _mercury_alert_type(alert):
+    """The MTA Mercury extension's human alert_type, e.g. 'Planned - Reroute'."""
+    return (alert.get("transit_realtime.mercury_alert", {}) or {}).get("alert_type", "")
+
+
+def _is_transient_alert(alert, text):
+    """
+    True for transient real-time incidents (delays, signal problems) we drop.
+    False for planned/scheduled service changes — reroutes, suspensions,
+    skip-stops, express-to-local, etc. — which we keep.
+    """
+    if _mercury_alert_type(alert) in REALTIME_ALERT_TYPES:
+        return True
+    low = text.lower()
+    return any(kw in low for kw in REALTIME_KEYWORDS)
+
+
+def _weekend_epoch_window(saturday, sunday):
+    """
+    Epoch-second bounds for the weekend, in the dispatch's local timezone:
+    Saturday 00:00:00 through Sunday 23:59:59 ET. Same Sat/Sun the weather and
+    Greenmarket sections use (passed in from main()).
+    """
+    from zoneinfo import ZoneInfo
+    tz = ZoneInfo(TIMEZONE)
+    start = datetime.datetime(saturday.year, saturday.month, saturday.day,
+                              0, 0, 0, tzinfo=tz)
+    end = datetime.datetime(sunday.year, sunday.month, sunday.day,
+                            23, 59, 59, tzinfo=tz)
+    return int(start.timestamp()), int(end.timestamp())
+
+
+def _alert_active_in_window(alert, win_start, win_end):
+    """
+    True if any of the alert's active_period ranges overlaps the weekend window.
+    A missing 'end' means open-ended (ongoing); a missing active_period means
+    always-active (GTFS-rt) and so counts as overlapping.
+    """
+    periods = alert.get("active_period") or []
+    if not periods:
+        return True
+    for p in periods:
+        start = p.get("start") or 0
+        end = p.get("end") or (1 << 62)  # open-ended
+        if start <= win_end and end >= win_start:
+            return True
+    return False
+
+
+def fetch_mta_alerts(saturday, sunday):
+    """
+    Pull MTA subway service alerts that inform route A, C, or 3 from the
+    GTFS-realtime Service Alerts feed (camsys JSON), system-wide — not scoped to
+    any hand-picked station list — then apply two filters and split into groups.
+
+    Filters:
+      - Planned vs. transient: keep planned/scheduled changes (reroutes,
+        suspensions, skip-stops, express-to-local, …); drop transient real-time
+        incidents (delays, signal problems). See _is_transient_alert.
+      - Weekend scope: keep only alerts whose active_period overlaps the
+        Saturday–Sunday window (the same window weather/Greenmarket use); drop
+        changes planned for later in the week. See _alert_active_in_window.
+
+    Each alert carries an informed_entity[] list; an entity may name a route
+    (route_id), a stop (stop_id), or both. For each alert we take the union of
+    all route_ids and all stop_ids across its entities, then:
+
+      - keep it only if it informs one of HOME_LINES (A / C / 3); and
+      - split it into one of two groups by its informed stops:
+
+        your_stations — informs one of the five HOME_STOPS, OR is line-level
+                        (names no specific stop at all — affects the whole line,
+                        so it counts as yours).
+        elsewhere     — names specific stops, none of which are home stops.
+
+    Returns {"your_stations": [...], "elsewhere": [...]}. Each item is a dict:
+      {
+        "text":          alert header (falls back to description),
+        "routes":        ["A", "C", ...] limited to A/C/3, in HOME_LINES order,
+        "home_stations": ["Nostrand Av (A/C)", ...] labels for any home stops hit,
+        "stop_ids":      sorted list of every stop_id the alert names,
+      }
+    """
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
@@ -372,88 +478,71 @@ def fetch_mta_alerts():
         )
     }
 
-    found = []
+    try:
+        r = requests.get(MTA_ALERTS_FEED, headers=headers, timeout=15)
+        r.raise_for_status()
+        data = r.json()
+    except Exception:
+        return {"your_stations": [], "elsewhere": []}
 
-    for url in ["https://new.mta.info/alerts", "https://www.mta.info/alerts"]:
-        try:
-            r = requests.get(url, headers=headers, timeout=12)
-            if r.status_code != 200:
-                continue
-            soup = BeautifulSoup(r.text, "html.parser")
-            for el in soup.find_all(string=True):
-                text = el.strip()
-                if len(text) < 20:
-                    continue
-                low = text.lower()
+    home_lines = set(HOME_LINES)
+    home_stops = set(HOME_STOPS)
+    win_start, win_end = _weekend_epoch_window(saturday, sunday)
 
-                # Must mention our lines or stations
-                line_match = any(kw in low for kw in TARGET_LINES)
-                station_match = any(kw in low for kw in TARGET_STATIONS)
-                if not (line_match or station_match):
-                    continue
+    your_stations, elsewhere = [], []
+    seen = set()
 
-                # Must have a planned-change keyword
-                is_planned = any(kw in low for kw in PLANNED_KEYWORDS)
-                if not is_planned:
-                    continue
-
-                # Must NOT be a real-time incident
-                is_realtime = any(kw in low for kw in REALTIME_KEYWORDS)
-                if is_realtime:
-                    continue
-
-                if text not in found:
-                    found.append(text[:350])
-
-            if found:
-                break
-        except Exception:
+    for entity in data.get("entity", []):
+        alert = entity.get("alert")
+        if not alert:
             continue
 
-    return found[:6]
+        informed = alert.get("informed_entity", []) or []
+        routes = {ie.get("route_id") for ie in informed if ie.get("route_id")}
+        stops = {ie.get("stop_id") for ie in informed if ie.get("stop_id")}
 
+        # Route filter: the alert must inform the A, C, or 3.
+        matched_routes = routes & home_lines
+        if not matched_routes:
+            continue
 
-def fetch_mta_rss_alerts():
-    """
-    Secondary MTA source: planned service change RSS/text scrape.
-    Same filtering logic — planned changes only, A/C/3 focused.
-    """
-    PLANNED_KEYWORDS = [
-        "planned", "scheduled", "reroute", "skip", "will not stop",
-        "bypass", "suspended", "shuttle", "replacement", "running via",
-        "diverted", "alternate", "weekend service", "no service",
-    ]
-    REALTIME_KEYWORDS = [
-        "delay", "delayed", "signal problem", "sick customer",
-        "police activity", "investigation", "smoke", "medical",
-    ]
-    TARGET = [
-        "kingston", "nostrand", "utica", "crown heights",
-        "throop", "a train", "c train", "3 train", "a/c", "3/4",
-    ]
-    try:
-        r = requests.get(
-            "https://new.mta.info/alerts",
-            timeout=10,
-            headers={"User-Agent": "Mozilla/5.0"}
-        )
-        soup = BeautifulSoup(r.text, "html.parser")
-        texts = []
-        for el in soup.find_all(string=True):
-            stripped = el.strip()
-            if len(stripped) < 30:
-                continue
-            low = stripped.lower()
-            if not any(kw in low for kw in TARGET):
-                continue
-            if not any(kw in low for kw in PLANNED_KEYWORDS):
-                continue
-            if any(kw in low for kw in REALTIME_KEYWORDS):
-                continue
-            texts.append(stripped[:250])
-        return list(dict.fromkeys(texts))[:5]
-    except Exception:
-        return []
+        text = (_gtfs_translated_text(alert.get("header_text"))
+                or _gtfs_translated_text(alert.get("description_text")))
+        if not text:
+            continue
+
+        # Planned-vs-transient filter: drop real-time delays / signal problems,
+        # keep planned reroutes, suspensions, skip-stops, express patterns.
+        if _is_transient_alert(alert, text):
+            continue
+
+        # Weekend-scope filter: only alerts active Saturday or Sunday.
+        if not _alert_active_in_window(alert, win_start, win_end):
+            continue
+
+        # De-dupe identical alerts that recur across entities.
+        dedupe_key = text[:160]
+        if dedupe_key in seen:
+            continue
+        seen.add(dedupe_key)
+
+        home_hits = stops & home_stops
+        item = {
+            "text": text,
+            "routes": [r for r in HOME_LINES if r in matched_routes],
+            "home_stations": [label for sid, label in HOME_STOPS.items()
+                              if sid in home_hits],
+            "stop_ids": sorted(stops),
+        }
+
+        # Home stop hit, OR line-level (no specific stop) -> yours.
+        # Otherwise it names specific, non-home stops -> elsewhere.
+        if home_hits or not stops:
+            your_stations.append(item)
+        else:
+            elsewhere.append(item)
+
+    return {"your_stations": your_stations, "elsewhere": elsewhere}
 
 
 def fetch_surface_transit_alerts():
@@ -465,7 +554,7 @@ def fetch_surface_transit_alerts():
     reroute, suspension, or service cut. If nothing matching is found, this
     returns an empty list and the services are not mentioned in the dispatch
     at all (per the "only if cut or altered" rule). Normal subway info is
-    handled separately by fetch_mta_alerts / fetch_mta_rss_alerts.
+    handled separately by fetch_mta_alerts.
 
     Returns a list of {"service": <label>, "text": <alert text>} dicts.
     """
@@ -918,13 +1007,15 @@ def fetch_brooklyn_news():
 def generate_narrative(
     saturday_data, sunday_data,
     sat_windows, sun_windows,
-    mta_alerts, mta_rss,
-    surface_alerts,
     market_result, market_list,
     bpl_events,
     brooklyn_news,
     client
 ):
+    # NOTE: The MTA section is no longer written by Claude. It is rendered
+    # directly from structured GTFS-realtime alert data (see fetch_mta_alerts
+    # and build_mta_section_html), so this narrative covers the other four
+    # sections only.
     today = datetime.date.today()
     days_until_sat = (5 - today.weekday()) % 7
     saturday = today + datetime.timedelta(days=days_until_sat)
@@ -932,20 +1023,6 @@ def generate_narrative(
 
     sat_str = saturday.strftime("%B %d")
     sun_str = sunday.strftime("%B %d")
-
-    # Combine MTA alert sources
-    all_mta = list(dict.fromkeys(mta_alerts + mta_rss))
-
-    # Format surface-transit alerts (bus / AirTrain / LIRR). These are only
-    # present in the data when a service is actually cut or altered.
-    if surface_alerts:
-        surface_lines = "\n".join(
-            f"  - {a['service']}: {a['text']}" for a in surface_alerts
-        )
-    else:
-        surface_lines = ("NONE — no disruptions found for the B65, B43, JFK AirTrain "
-                         "(Jamaica/Howard Beach), or Nostrand Av LIRR. DO NOT MENTION "
-                         "these services at all.")
 
     # Format walk windows — include forced_early flag for Claude
     def fmt_windows(windows):
@@ -1030,18 +1107,6 @@ SUNDAY ({sun_str}):
 SUNDAY MABEL WALK WINDOWS:
 {fmt_windows(sun_windows)}
 
-=== MTA SERVICE ALERTS ===
-Stations to watch: Kingston-Throop Avenues (C), Nostrand Avenue (A/C),
-Utica Avenue (A/C), Kingston Avenue (3), Crown Heights-Utica Avenue (3/4)
-
-Raw alert data found:
-{chr(10).join(all_mta) if all_mta else "No specific alerts found for these stations."}
-
-Additional surface-transit services (CONDITIONAL — mention ONLY if disrupted):
-B65 bus, B43 bus, JFK AirTrain (Jamaica and Howard Beach), Nostrand Av LIRR.
-Disruption data found for these services:
-{surface_lines}
-
 === FARMERS MARKET ===
 Grand Army Plaza Greenmarket verdict: {market_result['verdict']}
 Reason: {market_result['reason']}
@@ -1076,12 +1141,7 @@ sci-fi, investigative journalism, bikes/surf/street culture, food, left politics
 
 === INSTRUCTIONS ===
 
-Write the dispatch in five labeled sections:
-
-MTA THIS WEEKEND
-PLANNED SERVICE CHANGES ONLY. Ignore real-time delays, signal problems, and incidents — those are not in the data. If the alerts data contains planned reroutes, skip-stop patterns, suspended service, or route changes for the A, C, or 3 lines, translate them into plain English: which line, which stations affected, which direction, and what to do instead. If no planned changes are found for the subway, say exactly: "No planned service changes for the A, C, or 3 this weekend."
-
-Then, regarding the B65 bus, B43 bus, JFK AirTrain (Jamaica/Howard Beach), and Nostrand Av LIRR: these are CONDITIONAL. Mention a service ONLY if the "Disruption data found" block above contains an actual reroute, suspension, or service cut for it. If that block says NONE, or a given service is not listed there, do NOT mention that service at all — say nothing about the buses, AirTrain, or LIRR. When a disruption IS present, add a brief plain-English line for it (which service, what changed, what to do instead) after the subway info.
+Write the dispatch in four labeled sections (the MTA section is generated separately — do NOT write it):
 
 WEATHER + MABEL
 2–3 sentences covering both days. Zach's default is leaving home between 10am and noon on weekends — he is not getting up at 6am unless forced. Work from that assumption. If the walk window data shows [RAIN FORCES EARLIER START], acknowledge that plainly and tell him rain is arriving mid-morning so he'll need to move if he wants to get Mabel out dry. If the 10am–noon window is just hot (not rainy), tell him what to expect at that hour and how to manage it with Mabel. Always include the evening window as a second option. Be specific about Saturday vs Sunday if they differ.
@@ -1125,7 +1185,73 @@ Write it as one cohesive email. Don't start with "Hello" or "Hi Zach." Just star
 # EMAIL ASSEMBLY
 # ─────────────────────────────────────────────
 
-def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
+def build_mta_section_html(mta_groups, surface_alerts):
+    """
+    Render the body of the MTA section from structured alert data (not prose):
+    'Your stations' first, then 'Elsewhere on the A/C/3', each a stack of alert
+    cards reusing the existing .news-item styling. An empty group is omitted
+    entirely, header and all. If both A/C/3 groups are empty, show the same
+    kind of plain empty-state line the dispatch used before.
+
+    Surface-transit disruptions (B65/B43/AirTrain/LIRR), when present, follow
+    underneath — still conditional, shown only when something is actually cut.
+    """
+    import html as _html
+
+    def render_item(item, show_station):
+        routes = "/".join(item.get("routes", []))
+        if show_station and item.get("home_stations"):
+            eyebrow = ", ".join(item["home_stations"])
+        elif routes:
+            eyebrow = f"{routes} line"
+        else:
+            eyebrow = ""
+        eyebrow_html = (f'<div class="news-source">{_html.escape(eyebrow)}</div>'
+                        if eyebrow else "")
+        body = _html.escape(item.get("text", ""))
+        return f"""
+            <div class="news-item">
+              {eyebrow_html}
+              <div class="news-hed">{body}</div>
+            </div>"""
+
+    def render_group(label, items, show_station):
+        if not items:
+            return ""
+        cards = "".join(render_item(i, show_station) for i in items)
+        return f"""
+          <div class="mta-group">
+            <div class="mta-group-label">{label}</div>
+            <div class="news-feed">{cards}</div>
+          </div>"""
+
+    your = mta_groups.get("your_stations", [])
+    elsewhere = mta_groups.get("elsewhere", [])
+
+    html = ""
+    html += render_group("Your stations", your, show_station=True)
+    html += render_group("Elsewhere on the A/C/3", elsewhere, show_station=False)
+
+    if not html:
+        html = "<p>No current service alerts on the A, C, or 3.</p>"
+
+    # Surface transit — conditional, only when a service is actually disrupted.
+    if surface_alerts:
+        surface_items = []
+        for a in surface_alerts:
+            surface_items.append({
+                "text": a.get("text", ""),
+                "routes": [],
+                "home_stations": [a.get("service", "")],
+            })
+        html += render_group("Buses · AirTrain · LIRR", surface_items,
+                             show_station=True)
+
+    return html
+
+
+def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
+                     mta_groups, surface_alerts):
     sat_label = saturday.strftime("%A, %B %d")
     sun_label = sunday.strftime("%B %d")
     sat_date_top = saturday.strftime("%B %d")
@@ -1169,7 +1295,20 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
         label, roman = section_labels_display[i]
         content = parsed.get(key, "")
 
-        if key == "AROUND BROOKLYN":
+        if key == "MTA THIS WEEKEND":
+            # MTA is rendered from structured alert data, not Claude prose:
+            # two informed-entity groups, reusing the .news-item card styling.
+            mta_html = build_mta_section_html(mta_groups, surface_alerts)
+            html_sections += f"""
+        <div class="b4-section">
+          <div class="b4-label-row">
+            <span class="b4-label">{label}</span>
+            <div class="b4-label-rule"></div>
+            <span class="b4-label-roman">{roman}</span>
+          </div>
+          {mta_html}
+        </div>"""
+        elif key == "AROUND BROOKLYN":
             # Parse grouped [SOURCE] blocks into styled cards
             import re as _re
             items_html = ""
@@ -1382,6 +1521,9 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday):
   .b4-section p:last-child {{ margin-bottom: 0; }}
   .b4-section a {{ color: #9B3A1A; }}
   .news-feed {{ display: flex; flex-direction: column; gap: 0; }}
+  .mta-group {{ margin-bottom: 20px; }}
+  .mta-group:last-child {{ margin-bottom: 0; }}
+  .mta-group-label {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #9B3A1A; margin-bottom: 12px; }}
   .news-item {{ padding: 12px 0 12px 14px; border-left: 2px solid #9B3A1A; margin-bottom: 14px; }}
   .news-item:last-child {{ margin-bottom: 0; }}
   .news-source {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #B89A5A; margin-bottom: 8px; }}
@@ -1828,10 +1970,11 @@ def main():
     sat_windows = get_walk_windows(saturday_data, "saturday") if saturday_data else []
     sun_windows = get_walk_windows(sunday_data, "sunday") if sunday_data else []
 
-    # 3. MTA
+    # 3. MTA — planned A/C/3 alerts active this weekend, grouped by informed entity
     print("Fetching MTA alerts...")
-    mta_alerts = fetch_mta_alerts()
-    mta_rss = fetch_mta_rss_alerts()
+    mta_groups = fetch_mta_alerts(saturday, sunday)
+    print(f"  A/C/3 alerts — your stations: {len(mta_groups['your_stations'])}, "
+          f"elsewhere: {len(mta_groups['elsewhere'])}")
     surface_alerts = fetch_surface_transit_alerts()
     if surface_alerts:
         print(f"  Surface-transit disruptions: "
@@ -1859,8 +2002,6 @@ def main():
     narrative = generate_narrative(
         saturday_data, sunday_data,
         sat_windows, sun_windows,
-        mta_alerts, mta_rss,
-        surface_alerts,
         market_result, market_list,
         bpl_events,
         brooklyn_news,
@@ -1869,7 +2010,8 @@ def main():
 
     # 8. Build newsletter HTML + save locally
     print("Building newsletter...")
-    newsletter_html = build_email_html(narrative, saturday_data, sunday_data, saturday, sunday)
+    newsletter_html = build_email_html(narrative, saturday_data, sunday_data,
+                                       saturday, sunday, mta_groups, surface_alerts)
     newsletter_url = save_newsletter_html(newsletter_html, saturday)
     print(f"  Newsletter saved: {newsletter_url}")
 
