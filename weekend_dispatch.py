@@ -114,9 +114,8 @@ ALTERNATE_STATIONS = [
     {"stop_id": "A45", "name": "Franklin Av",                "lines": ["C", "3"], "walk": "~0.9 mi west"},
 ]
 
-# BPL Central Branch
-BPL_EVENTS_URL = "https://www.bklynlibrary.org/events"
-BPL_BRANCH_FILTER = "Central Library"  # 560 New York Ave at Maple St
+# Public Records (venue)
+PUBLIC_RECORDS_URL = "https://publicrecords.nyc/"
 
 # Farmers market
 GRAND_ARMY_MARKET_URL = "https://www.grownyc.org/greenmarket/brooklyn-grand-army-plaza"
@@ -742,126 +741,103 @@ def market_go_nogo(saturday_data, market_list):
 
 
 # ─────────────────────────────────────────────
-# BPL EVENTS
+# PUBLIC RECORDS EVENTS
 # ─────────────────────────────────────────────
 
-def fetch_bpl_events():
+def fetch_public_records_events():
     """
-    Fetch BPL events via multiple strategies:
-    1. BPL JSON/API endpoint (most reliable)
-    2. Calendar page scrape with realistic browser headers
-    3. Google cache fallback
-    Returns list of event dicts with 'text' and 'is_central' fields.
+    Scrape upcoming shows from Public Records (233 Butler St, Gowanus).
+    Their homepage lists all events in server-rendered HTML with Dice.fm ticket links.
+    Returns list of dicts with 'text', 'url', 'date_str', 'type' fields.
     """
-    today = datetime.date.today()
-    end_date = today + datetime.timedelta(days=14)
-
+    import re as _re
     headers = {
         "User-Agent": (
             "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
             "AppleWebKit/537.36 (KHTML, like Gecko) "
             "Chrome/124.0.0.0 Safari/537.36"
         ),
-        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
-        "Accept-Language": "en-US,en;q=0.9",
-        "Referer": "https://www.bklynlibrary.org/",
     }
-
     events = []
-
-    # Strategy 1: BPL's internal event JSON feed (Drupal-based)
     try:
-        json_url = (
-            f"https://www.bklynlibrary.org/events?format=json"
-            f"&date_filter[min]={today.isoformat()}"
-            f"&date_filter[max]={end_date.isoformat()}"
-        )
-        r = requests.get(json_url, headers=headers, timeout=15)
-        if r.status_code == 200 and r.headers.get("content-type", "").startswith("application/json"):
-            data = r.json()
-            for item in (data.get("nodes") or data.get("events") or [])[:40]:
-                title = item.get("title", item.get("node_title", ""))
-                date = item.get("field_event_date", item.get("date", ""))
-                time = item.get("field_event_time", item.get("time", ""))
-                location = item.get("field_location", item.get("branch", ""))
-                desc = item.get("body", item.get("field_description", ""))
-                path = item.get("path", item.get("url", item.get("nid", "")))
-                url = (f"https://www.bklynlibrary.org{path}"
-                       if path and path.startswith("/") else
-                       f"https://www.bklynlibrary.org/events/{path}" if path else "")
-                text = f"{title} | {date} {time} | {location} | {desc}"
-                is_central = "central" in str(location).lower() or "grand army" in str(location).lower()
-                events.append({"text": text[:400], "url": url, "is_central": is_central})
+        r = requests.get("https://publicrecords.nyc/", headers=headers, timeout=15)
+        if r.status_code != 200:
+            return events
+        soup = BeautifulSoup(r.text, "html.parser")
+
+        # Each row div contains: "Day M.DD Type,\n   HH:MM pm, Room"
+        # Its parent <a> wraps the row and sibling divs for artist names.
+        today = datetime.date.today()
+        current_year = today.year
+
+        for el in soup.find_all("div"):
+            text = el.get_text(" ", strip=True)
+            # Match: "Sat 7.4 Club, 3:00 pm, Sound Room The Atrium The Nursery Upstairs"
+            m = _re.match(
+                r"^(Mon|Tue|Wed|Thu|Fri|Sat|Sun)\s+(\d{1,2})\.(\d{1,2})"
+                r"\s+(Live|Club|Etc),\s*(\d{1,2}:\d{2}\s*(?:am|pm)),\s*(.+)$",
+                text, _re.I
+            )
+            if not m:
+                continue
+
+            month_num = int(m.group(2))
+            day_num   = int(m.group(3))
+            event_type = m.group(4)
+            event_time = m.group(5).strip()
+            room       = m.group(6).strip()
+
+            try:
+                event_date = datetime.date(current_year, month_num, day_num)
+                if event_date < today:
+                    event_date = datetime.date(current_year + 1, month_num, day_num)
+            except ValueError:
+                continue
+
+            # Artist names are in a sibling div inside the same parent <a>
+            parent_a = el.find_parent("a", href=True)
+            if not parent_a:
+                continue
+
+            siblings_text = [
+                s.get_text(" ", strip=True)
+                for s in el.parent.children
+                if hasattr(s, "get_text") and s.get_text(strip=True) and s is not el
+            ]
+            # Artist div is the first sibling; strip "Get tickets" noise
+            artists_raw = siblings_text[0] if siblings_text else ""
+            artists = _re.sub(r"\s*Get tickets.*$", "", artists_raw, flags=_re.I).strip()
+
+            date_label = event_date.strftime("%a %b %-d")
+            summary = f"{date_label} — {event_type} — {event_time} @ {room}"
+            if artists:
+                summary += f" — {artists}"
+
+            events.append({
+                "text": summary[:350],
+                "url": parent_a["href"],
+                "date": event_date,
+                "type": event_type,
+            })
+
     except Exception:
         pass
 
-    # Strategy 2: HTML scrape of calendar page — capture anchor hrefs
-    if not events:
-        for cal_url in [
-            "https://www.bklynlibrary.org/calendar",
-            "https://www.bklynlibrary.org/events",
-        ]:
-            try:
-                r = requests.get(cal_url, headers=headers, timeout=15)
-                if r.status_code != 200:
-                    continue
-                soup = BeautifulSoup(r.text, "html.parser")
+    # Keep only the upcoming Saturday's events, dedupe by URL
+    today = datetime.date.today()
+    days_until_sat = (5 - today.weekday()) % 7
+    next_saturday = today + datetime.timedelta(days=days_until_sat)
 
-                for el in soup.find_all(["article", "div", "li", "section"]):
-                    classes = " ".join(el.get("class", []))
-                    if not any(kw in classes.lower() for kw in
-                               ["event", "program", "calendar", "views-row"]):
-                        continue
-                    text = el.get_text(" ", strip=True)
-                    if len(text) < 30 or len(text) > 1000:
-                        continue
-                    # Extract first internal link found within this element
-                    anchor = el.find("a", href=lambda h: h and "/event" in h)
-                    if not anchor:
-                        anchor = el.find("a", href=lambda h: h and h.startswith("/"))
-                    href = anchor["href"] if anchor else ""
-                    event_url = (f"https://www.bklynlibrary.org{href}"
-                                 if href.startswith("/") else href)
-                    is_central = (
-                        "central" in text.lower() or
-                        "grand army" in text.lower() or
-                        "560 new york" in text.lower()
-                    )
-                    events.append({"text": text[:400], "url": event_url, "is_central": is_central})
+    seen_urls = set()
+    unique = []
+    for e in sorted(events, key=lambda x: x["date"]):
+        if e["date"] != next_saturday:
+            continue
+        if e["url"] not in seen_urls:
+            seen_urls.add(e["url"])
+            unique.append(e)
 
-                if events:
-                    break
-            except Exception:
-                continue
-
-    # Strategy 3: Eventbrite public search for BPL Central events
-    if not events:
-        try:
-            r = requests.get(
-                "https://www.eventbrite.com/d/ny--brooklyn/brooklyn-public-library/",
-                headers=headers,
-                timeout=15
-            )
-            if r.status_code == 200:
-                soup = BeautifulSoup(r.text, "html.parser")
-                for el in soup.find_all(["article", "div"],
-                                         class_=lambda c: c and "event" in str(c).lower()):
-                    text = el.get_text(" ", strip=True)
-                    anchor = el.find("a", href=True)
-                    event_url = anchor["href"] if anchor else ""
-                    if 30 < len(text) < 600:
-                        events.append({"text": text[:400], "url": event_url, "is_central": True})
-        except Exception:
-            pass
-
-    if not events:
-        events = [{
-            "text": "[BPL event data unavailable — check bklynlibrary.org/events directly]",
-            "url": "https://www.bklynlibrary.org/events",
-            "is_central": True
-        }]
-
-    return events[:30]
+    return unique
 
 
 def fetch_salon_kingston_events():
@@ -1091,10 +1067,9 @@ def generate_narrative(
     saturday_data, sunday_data,
     sat_windows, sun_windows,
     market_result, market_list,
-    bpl_events,
+    pr_events,
     brooklyn_news,
     client,
-    salon_events=None,
 ):
     # NOTE: The MTA section is no longer written by Claude. It is rendered
     # directly from structured GTFS-realtime alert data (see fetch_mta_alerts
@@ -1121,24 +1096,15 @@ def generate_narrative(
     # Format market list
     market_names = [m.get("marketname", "Unknown") for m in market_list[:5]]
 
-    # Format BPL events — include URLs for Claude to weave in
-    def fmt_bpl(events):
+    # Format Public Records events for prompt
+    def fmt_pr(events):
         lines = []
         for e in events[:20]:
             url_str = f" [URL: {e['url']}]" if e.get("url") else ""
             lines.append(f"{e['text']}{url_str}")
         return "\n---\n".join(lines)
 
-    bpl_text = fmt_bpl(bpl_events)
-
-    # Format Salon on Kingston events
-    salon_text = ""
-    if salon_events:
-        salon_lines = []
-        for e in salon_events[:10]:
-            url_str = f" [URL: {e['url']}]" if e.get("url") else ""
-            salon_lines.append(f"{e['text']}{url_str}")
-        salon_text = "\n---\n".join(salon_lines)
+    pr_text = fmt_pr(pr_events)
 
     # Guard market temps against non-numeric fallback
     _avg = market_result.get("avg_temp")
@@ -1207,23 +1173,13 @@ Sustained average temp during outing window: {market_avg_str} (peak {market_peak
 Market hours: {market_result['market_hours']}
 Other Brooklyn Saturday markets found: {', '.join(market_names)}
 
-=== BPL EVENTS (Brooklyn Public Library — Central Branch, 560 New York Ave) ===
-Upcoming events scraped (filter to top 3 most relevant to Zach's interests):
+=== PUBLIC RECORDS EVENTS (233 Butler St, Gowanus — 20 min by bike or B61 bus) ===
+Saturday night shows only, scraped from publicrecords.nyc. List all of them — there may be multiple on the same night across different rooms.
 
-Zach's interest profile:
-{INTEREST_PROFILE}
+- "Live" = live music/performance, "Club" = DJ/dance night, "Etc" = other
 
-Event timing rules:
-- Same-day Saturday events: must start at 1pm or later
-- Weekday events: must start at 5:30pm or later
-- Sunday events: any time
-- Following Saturday: any time before 1pm is fine
-
-Raw events data (URLs included — use them as hyperlinks in your output):
-{bpl_text if bpl_text else "No events data available."}
-
-=== SALON ON KINGSTON EVENTS (105 Kingston Ave, Crown Heights — 2 blocks from Zach's home) ===
-{salon_text if salon_text else "No events found for Salon on Kingston this week."}
+Raw events data (date, time, room, artists — URLs included):
+{pr_text if pr_text else "No Public Records events data available."}
 
 === BROOKLYN CULTURE NEWS ===
 Items from six feeds. Each item tagged [BROOKLYN] or [MANHATTAN] where detectable.
@@ -1245,8 +1201,8 @@ WEATHER + MABEL
 GRAND ARMY PLAZA GREENMARKET
 1–2 sentences. Lead with the verdict. If no-go, suggest one concrete indoor Brooklyn fallback.
 
-BROOKLYN PUBLIC LIBRARY
-Up to 3 events total, combining BPL (560 New York Ave) and Salon on Kingston (105 Kingston Ave — 2 blocks from Zach's home). Apply timing rules to both sources. For each: venue, event name, date, time, one sentence on why it's relevant, and a hyperlink formatted as HTML: <a href="URL">event name</a>. If no URL is available, omit the link. Prioritize Salon on Kingston events since they're walkable from home. If nothing matches from either source, say so honestly.
+PUBLIC RECORDS
+List every Saturday night show. For each: time, whether it's live music or a club night, artist name with ticket link as HTML: <a href="URL">artist name</a>, and one sentence on the act. If there are no Saturday shows this week, say so.
 
 AROUND BROOKLYN
 Surface 4–6 items across the feeds, grouped by source. Priority order:
@@ -1471,14 +1427,14 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
         "MTA THIS WEEKEND",
         "WEATHER + MABEL",
         "GRAND ARMY PLAZA GREENMARKET",
-        "BROOKLYN PUBLIC LIBRARY",
+        "PUBLIC RECORDS",
         "AROUND BROOKLYN",
     ]
     section_labels_display = [
         ("MTA This Weekend", "i."),
         ("Weather + Mabel", "ii."),
         ("Grand Army Greenmarket", "iii."),
-        ("Brooklyn Public Library", "iv."),
+        ("Public Records", "iv."),
         ("Around Brooklyn", "v."),
     ]
 
@@ -1576,6 +1532,52 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
           </div>
           <div class="news-feed">{items_html}</div>
         </div>"""
+        elif key == "PUBLIC RECORDS":
+            # Each line is one show: "Day Mon DD — Type — HH:MM pm @ Room — Artists — <a>Tickets</a>"
+            import re as _re
+            items_html = ""
+            lines = [l.strip() for l in content.strip().split("\n") if l.strip()]
+            for line in lines:
+                # Split out the ticket link if present
+                ticket_match = _re.search(r'(<a href="[^"]+">Tickets</a>)', line)
+                ticket_html = ticket_match.group(1) if ticket_match else ""
+                clean = _re.sub(r'\s*—\s*<a href="[^"]+">Tickets</a>', "", line).strip()
+                # Parse: "Sat Jul 5 — Live — 7:00 pm @ Sound Room — Artists"
+                parts = [p.strip() for p in clean.split(" — ")]
+                if len(parts) >= 4:
+                    date_str  = parts[0]   # "Sat Jul 5"
+                    show_type = parts[1]   # "Live" / "Club" / "Etc"
+                    time_room = parts[2]   # "7:00 pm @ Sound Room"
+                    artists   = " — ".join(parts[3:])
+                elif len(parts) == 3:
+                    date_str  = parts[0]
+                    show_type = parts[1]
+                    time_room = parts[2]
+                    artists   = ""
+                else:
+                    items_html += f"<p>{line}</p>"
+                    continue
+                source_label = f"{date_str} &middot; {show_type}"
+                hed = artists if artists else time_room
+                dek = time_room if artists else ""
+                ticket_bit = f" {ticket_html}" if ticket_html else ""
+                items_html += f"""
+          <div class="news-item">
+            <div class="news-source">{source_label}</div>
+            <div class="news-headline-row">
+              <div class="news-hed">{hed}{ticket_bit}</div>
+              {"<div class='news-dek'>" + dek + "</div>" if dek else ""}
+            </div>
+          </div>"""
+            html_sections += f"""
+        <div class="b4-section">
+          <div class="b4-label-row">
+            <span class="b4-label">{label}</span>
+            <div class="b4-label-rule"></div>
+            <span class="b4-label-roman">{roman}</span>
+          </div>
+          <div class="news-feed">{items_html}</div>
+        </div>"""
         else:
             paras = [p.strip() for p in content.split("\n\n") if p.strip()]
             paras_html = "".join(f"<p>{p}</p>" for p in paras) if paras else f"<p>{content}</p>"
@@ -1648,6 +1650,7 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 <style>
   body {{ margin: 0; padding: 16px; background: #EDE0C0; }}
@@ -2118,7 +2121,7 @@ def build_envelope_email(saturday, sunday, newsletter_url):
     <div class="peek-title">The<br><em>Week</em>end.</div>
     <div class="peek-rule"></div>
     <div class="peek-section-label">{sat_day}, {sat_label} &mdash; {sun_label} &middot; {year}</div>
-    <p class="peek-text">Your full dispatch is ready &mdash; weather &amp; Mabel walk windows, the Greenmarket verdict, BPL events, and what&rsquo;s going on around Brooklyn this weekend.</p>
+    <p class="peek-text">Your full dispatch is ready &mdash; weather &amp; Mabel walk windows, the Greenmarket verdict, what&rsquo;s on at Public Records, and what&rsquo;s going on around Brooklyn this weekend.</p>
     <div class="cta-wrap">
       <a class="cta-btn" href="{newsletter_url}">&darr;&nbsp;&nbsp;Open Full Newsletter</a>
     </div>
@@ -2165,7 +2168,7 @@ def _placeholder_narrative():
     return (
         f"WEATHER + MABEL\n{ph}\n\n"
         f"GRAND ARMY PLAZA GREENMARKET\n{ph}\n\n"
-        f"BROOKLYN PUBLIC LIBRARY\n{ph}\n\n"
+        f"PUBLIC RECORDS\n{ph}\n\n"
         f"AROUND BROOKLYN\n[Preview]\nPlaceholder headline — {ph}"
     )
 
@@ -2219,12 +2222,10 @@ def assemble_newsletter(client):
     market_list = fetch_market_data()
     market_result = market_go_nogo(saturday_data, market_list)
 
-    # 5. BPL events + Salon on Kingston
-    print("Scraping BPL events...")
-    bpl_events = fetch_bpl_events()
-    print("Scraping Salon on Kingston events...")
-    salon_events = fetch_salon_kingston_events()
-    print(f"  Salon on Kingston events found: {len(salon_events)}")
+    # 5. Public Records events
+    print("Scraping Public Records events...")
+    pr_events = fetch_public_records_events()
+    print(f"  Public Records events found: {len(pr_events)}")
 
     # 6. Brooklyn culture news
     print("Fetching Brooklyn news feeds...")
@@ -2239,10 +2240,9 @@ def assemble_newsletter(client):
             saturday_data, sunday_data,
             sat_windows, sun_windows,
             market_result, market_list,
-            bpl_events,
+            pr_events,
             brooklyn_news,
             client,
-            salon_events=salon_events,
         )
     else:
         print("No Anthropic client — using placeholder narrative sections...")

@@ -2,6 +2,7 @@
 <html>
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
 <link href="https://fonts.googleapis.com/css2?family=Cormorant+Garamond:ital,wght@0,300;0,400;0,600;1,300;1,400;1,600&family=Courier+Prime:ital,wght@0,400;0,700;1,400&display=swap" rel="stylesheet">
 <style>
   body { margin: 0; padding: 16px; background: #EDE0C0; }
@@ -86,7 +87,9 @@
   .mta-group { margin-bottom: 20px; }
   .mta-group:last-child { margin-bottom: 0; }
   .mta-group-label { font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #9B3A1A; margin-bottom: 12px; }
-  .news-item { padding: 12px 0 12px 14px; border-left: 2px solid #9B3A1A; margin-bottom: 14px; }
+  .news-item { padding: 12px 0 16px 14px; border-left: 2px solid #9B3A1A; margin-bottom: 16px; }
+  .news-item + .news-item { border-top: 1px solid #D4B98A; padding-top: 16px; margin-top: 4px; }
+  .news-item:last-child { margin-bottom: 0; }
   .news-item:last-child { margin-bottom: 0; }
   .news-source { font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #B89A5A; margin-bottom: 8px; }
   .news-headline-row { margin-bottom: 8px; }
@@ -202,10 +205,7 @@
               <div class="news-source">Crown Hts–Utica Av (3/4)</div>
               <div class="news-hed">In Brooklyn, no [3] between Crown Hts-Utica Av and New Lots Av</div>
             </div>
-            <div class="news-item">
-              <div class="news-source">Kingston–Throop Avs (C), Nostrand Av (A/C), Utica Av (A/C)</div>
-              <div class="news-hed">Take the [A] instead</div>
-            </div></div>
+            </div>
           </div>
           <div class="mta-group">
             <div class="mta-group-label">Elsewhere on the A/C/3</div>
@@ -251,17 +251,44 @@ Lefferts Blvd [A] trains are rerouted to Rockaway Park-Beach 116 St</div>
             <div class="b4-label-rule"></div>
             <span class="b4-label-roman">v.</span>
           </div>
-          <div class="news-feed"><p>THE CITY
-<a href="https://www.thecityreporter.nyc/2026/06/26/rent-freeze-lease-how-mamdani-landlord-sign-when/">How the Rent Freeze Will Work for Your Next Lease: A Guide for Tenants</a> — Rent Guidelines Board froze stabilized rents at 0% for a million apartments; this walks you through what happens when your lease comes up. <a href="https://www.thecityreporter.nyc/2026/06/26/tps-haitian-court-ruling-immigrants-deportation/">NYC's Haitian Community Reels in Wake of Supreme Court TPS Ruling</a> — Supreme Court ended Temporary Protected Status for Haitian and Syrian immigrants Thursday; Brooklyn's Haitian community is organizing in response.
-
-STREETSBLOG NYC
-<a href="https://nyc.streetsblog.org/2026/06/26/friday-video-a-grand-grand-army-plaza">Friday Video: A 'Grand' Grand Army Plaza</a> — Third Place News imagines the ceremonial arch as part of Prospect Park proper, not a traffic island—relevant to your Sunday walk routing. <a href="https://nyc.streetsblog.org/2026/06/26/nypd-wont-let-super-speeder-cop-drive-squad-cars-as-internal-affairs-launches-probe-following-streetsblog-report">NYPD Won't Let Super-Speeder Cop Drive Squad Cars</a> — Internal Affairs pulled driving privileges from Officer Giovansanti after Streetsblog documented his speed-camera violations; rare accountability win.
-
-GOTHAMIST
-<a href="https://gothamist.com/news/nyc-pools-open-for-the-summer-90-years-after-robert-moses-expanded-access-to-swimming">NYC pools open for the summer, 90 years after Robert Moses expanded access to swimming</a> — Pools open 11am Saturday through September 13; the piece ties it to Moses's 1936 expansion, which fits your urban-infrastructure lens.
-
-HYPERALLERGIC
-<a href="https://hyperallergic.com/every-dog-has-its-artist/">Every Dog Has Its Artist</a> — New book surveys canine companions across Western art history; Mabel might appreciate the research.</p></div>
+          <div class="news-feed">
+            <div class="news-item">
+              <div class="news-source">The City</div>
+              <div class="news-headline-row">
+                <div class="news-hed"><a href="https://www.thecityreporter.nyc/2026/06/26/rent-freeze-lease-how-mamdani-landlord-sign-when/">How the Rent Freeze Will Work for Your Next Lease: A Guide for Tenants</a></div>
+                <div class="news-dek">Rent Guidelines Board froze stabilized rents at 0% for a million apartments; this walks you through what happens when your lease comes up.</div>
+              </div>
+              <div class="news-headline-row">
+                <div class="news-hed"><a href="https://www.thecityreporter.nyc/2026/06/26/tps-haitian-court-ruling-immigrants-deportation/">NYC's Haitian Community Reels in Wake of Supreme Court TPS Ruling</a></div>
+                <div class="news-dek">Supreme Court ended Temporary Protected Status for Haitian and Syrian immigrants Thursday; Brooklyn's Haitian community is organizing in response.</div>
+              </div>
+            </div>
+            <div class="news-item">
+              <div class="news-source">Streetsblog NYC</div>
+              <div class="news-headline-row">
+                <div class="news-hed"><a href="https://nyc.streetsblog.org/2026/06/26/friday-video-a-grand-grand-army-plaza">Friday Video: A 'Grand' Grand Army Plaza</a></div>
+                <div class="news-dek">Third Place News imagines the ceremonial arch as part of Prospect Park proper, not a traffic island—relevant to your Sunday walk routing.</div>
+              </div>
+              <div class="news-headline-row">
+                <div class="news-hed"><a href="https://nyc.streetsblog.org/2026/06/26/nypd-wont-let-super-speeder-cop-drive-squad-cars-as-internal-affairs-launches-probe-following-streetsblog-report">NYPD Won't Let Super-Speeder Cop Drive Squad Cars</a></div>
+                <div class="news-dek">Internal Affairs pulled driving privileges from Officer Giovansanti after Streetsblog documented his speed-camera violations; rare accountability win.</div>
+              </div>
+            </div>
+            <div class="news-item">
+              <div class="news-source">Gothamist</div>
+              <div class="news-headline-row">
+                <div class="news-hed"><a href="https://gothamist.com/news/nyc-pools-open-for-the-summer-90-years-after-robert-moses-expanded-access-to-swimming">NYC pools open for the summer, 90 years after Robert Moses expanded access to swimming</a></div>
+                <div class="news-dek">Pools open 11am Saturday through September 13; the piece ties it to Moses's 1936 expansion, which fits your urban-infrastructure lens.</div>
+              </div>
+            </div>
+            <div class="news-item">
+              <div class="news-source">Hyperallergic</div>
+              <div class="news-headline-row">
+                <div class="news-hed"><a href="https://hyperallergic.com/every-dog-has-its-artist/">Every Dog Has Its Artist</a></div>
+                <div class="news-dek">New book surveys canine companions across Western art history; Mabel might appreciate the research.</div>
+              </div>
+            </div>
+          </div>
         </div>
   </div>
 
