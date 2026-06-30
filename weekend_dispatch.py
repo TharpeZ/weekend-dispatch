@@ -539,6 +539,12 @@ def fetch_mta_alerts(saturday, sunday):
         if _is_transient_alert(alert, text):
             continue
 
+        # Drop bare redirect alerts with no route context (e.g. "Take the [A] instead").
+        # These are unhelpful without knowing why and which stop is affected.
+        import re as _re
+        if len(text) < 80 and _re.search(r'take the \[|use the \[', text.lower()):
+            continue
+
         # Weekend-scope filter: only alerts active Saturday or Sunday.
         if not _alert_active_in_window(alert, win_start, win_end):
             continue
@@ -858,6 +864,69 @@ def fetch_bpl_events():
     return events[:30]
 
 
+def fetch_salon_kingston_events():
+    """
+    Fetch upcoming events at Salon on Kingston (105 Kingston Ave, Crown Heights).
+    Tries Eventbrite search first, then Partiful. Returns list of event dicts
+    with 'text' and 'url' fields, same shape as BPL events.
+    """
+    today = datetime.date.today()
+    headers = {
+        "User-Agent": (
+            "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/124.0.0.0 Safari/537.36"
+        ),
+        "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+        "Accept-Language": "en-US,en;q=0.9",
+    }
+
+    events = []
+
+    # Strategy 1: Eventbrite search
+    for search_url in [
+        "https://www.eventbrite.com/d/ny--brooklyn/salon-on-kingston/",
+        "https://www.eventbrite.com/d/ny--crown-heights/salon-on-kingston/",
+        "https://www.eventbrite.com/d/ny--brooklyn/events/?q=salon+on+kingston",
+    ]:
+        try:
+            r = requests.get(search_url, headers=headers, timeout=15)
+            if r.status_code != 200:
+                continue
+            soup = BeautifulSoup(r.text, "html.parser")
+            for el in soup.find_all(["article", "div"],
+                                     class_=lambda c: c and "event" in str(c).lower()):
+                text = el.get_text(" ", strip=True)
+                anchor = el.find("a", href=True)
+                url = anchor["href"] if anchor else ""
+                if 20 < len(text) < 500 and "salon" in text.lower():
+                    events.append({"text": text[:350], "url": url})
+            if events:
+                break
+        except Exception:
+            continue
+
+    # Strategy 2: Partiful search (they post events here)
+    if not events:
+        try:
+            r = requests.get(
+                "https://partiful.com/search?q=salon+on+kingston",
+                headers=headers, timeout=12
+            )
+            if r.status_code == 200:
+                soup = BeautifulSoup(r.text, "html.parser")
+                for el in soup.find_all(["a", "div"]):
+                    text = el.get_text(" ", strip=True)
+                    if "salon" in text.lower() and "kingston" in text.lower() and len(text) > 20:
+                        href = el.get("href", "")
+                        url = f"https://partiful.com{href}" if href.startswith("/") else href
+                        events.append({"text": text[:350], "url": url})
+        except Exception:
+            pass
+
+    return events[:10]
+
+
 # ─────────────────────────────────────────────
 # BROOKLYN CULTURE NEWS (RSS)
 # ─────────────────────────────────────────────
@@ -1024,7 +1093,8 @@ def generate_narrative(
     market_result, market_list,
     bpl_events,
     brooklyn_news,
-    client
+    client,
+    salon_events=None,
 ):
     # NOTE: The MTA section is no longer written by Claude. It is rendered
     # directly from structured GTFS-realtime alert data (see fetch_mta_alerts
@@ -1060,6 +1130,15 @@ def generate_narrative(
         return "\n---\n".join(lines)
 
     bpl_text = fmt_bpl(bpl_events)
+
+    # Format Salon on Kingston events
+    salon_text = ""
+    if salon_events:
+        salon_lines = []
+        for e in salon_events[:10]:
+            url_str = f" [URL: {e['url']}]" if e.get("url") else ""
+            salon_lines.append(f"{e['text']}{url_str}")
+        salon_text = "\n---\n".join(salon_lines)
 
     # Guard market temps against non-numeric fallback
     _avg = market_result.get("avg_temp")
@@ -1143,6 +1222,9 @@ Event timing rules:
 Raw events data (URLs included — use them as hyperlinks in your output):
 {bpl_text if bpl_text else "No events data available."}
 
+=== SALON ON KINGSTON EVENTS (105 Kingston Ave, Crown Heights — 2 blocks from Zach's home) ===
+{salon_text if salon_text else "No events found for Salon on Kingston this week."}
+
 === BROOKLYN CULTURE NEWS ===
 Items from six feeds. Each item tagged [BROOKLYN] or [MANHATTAN] where detectable.
 Slot 6 this week: {slot6_winner}
@@ -1164,7 +1246,7 @@ GRAND ARMY PLAZA GREENMARKET
 1–2 sentences. Lead with the verdict. If no-go, suggest one concrete indoor Brooklyn fallback.
 
 BROOKLYN PUBLIC LIBRARY
-Up to 3 events matching his interests, applying timing rules. For each: event name, date, time, one sentence on why it's relevant, and a hyperlink formatted as HTML: <a href="URL">event name</a>. If no URL is available, omit the link. If nothing matches, say so honestly.
+Up to 3 events total, combining BPL (560 New York Ave) and Salon on Kingston (105 Kingston Ave — 2 blocks from Zach's home). Apply timing rules to both sources. For each: venue, event name, date, time, one sentence on why it's relevant, and a hyperlink formatted as HTML: <a href="URL">event name</a>. If no URL is available, omit the link. Prioritize Salon on Kingston events since they're walkable from home. If nothing matches from either source, say so honestly.
 
 AROUND BROOKLYN
 Surface 4–6 items across the feeds, grouped by source. Priority order:
@@ -1647,6 +1729,7 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
   .b4-section p:last-child {{ margin-bottom: 0; }}
   .b4-section a {{ color: #9B3A1A; }}
   .news-feed {{ display: flex; flex-direction: column; gap: 0; }}
+  .news-item + .news-item {{ border-top: 1px solid #D4B98A; padding-top: 16px; margin-top: 4px; }}
   .mta-banner {{ font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16px; line-height: 1.6; color: #2A1E0A; margin: 0 0 16px; padding: 12px 16px; background: #EFE3C3; }}
   .mta-banner strong {{ color: #9B3A1A; font-weight: 600; }}
   .mta-banner--clear {{ border-left: 3px solid #C4A46A; }}
@@ -1654,7 +1737,7 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
   .mta-group {{ margin-bottom: 20px; }}
   .mta-group:last-child {{ margin-bottom: 0; }}
   .mta-group-label {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #9B3A1A; margin-bottom: 12px; }}
-  .news-item {{ padding: 12px 0 12px 14px; border-left: 2px solid #9B3A1A; margin-bottom: 14px; }}
+  .news-item {{ padding: 12px 0 16px 14px; border-left: 2px solid #9B3A1A; margin-bottom: 16px; }}
   .news-item:last-child {{ margin-bottom: 0; }}
   .news-source {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #B89A5A; margin-bottom: 8px; }}
   .news-headline-row {{ margin-bottom: 8px; }}
@@ -1934,6 +2017,10 @@ def build_envelope_email(saturday, sunday, newsletter_url):
           <stop offset="0" stop-color="#B49A66" stop-opacity="0.55"/>
           <stop offset="1" stop-color="#B49A66" stop-opacity="0"/>
         </linearGradient>
+        <!-- Clip the left fold polygon away from the return address so iOS Mail can't obscure it -->
+        <clipPath id="clip-no-addr">
+          <path fill-rule="evenodd" d="M0,0 H620 V400 H0 Z M26,178 H252 V242 H26 Z"/>
+        </clipPath>
         <radialGradient id="waxBody" cx="0.36" cy="0.30" r="0.85">
           <stop offset="0" stop-color="#C75732"/>
           <stop offset="0.4" stop-color="#A23F1D"/>
@@ -1962,7 +2049,7 @@ def build_envelope_email(saturday, sunday, newsletter_url):
       <rect x="6" y="74" width="608" height="318" rx="7" fill="url(#paper)" stroke="#C2A668" stroke-width="1.5"/>
 
       <!-- side + bottom folds meet at center (310,224) -->
-      <polygon points="6,76 6,390 310,224" fill="url(#sideL)" opacity="0.92"/>
+      <polygon points="6,76 6,390 310,224" fill="url(#sideL)" opacity="0.92" clip-path="url(#clip-no-addr)"/>
       <polygon points="614,76 614,390 310,224" fill="url(#sideR)" opacity="0.92"/>
       <polygon points="6,390 614,390 310,224" fill="url(#bottomP)" opacity="0.95"/>
       <line x1="6" y1="76" x2="310" y2="224" stroke="#BBA269" stroke-width="1" opacity="0.5"/>
@@ -1979,10 +2066,10 @@ def build_envelope_email(saturday, sunday, newsletter_url):
       <line x1="6" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
       <line x1="614" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
 
-      <!-- RETURN ADDRESS — stroke knockout ensures text reads over fold polygons on iOS Mail -->
-      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#E8D9B0" stroke-width="4" stroke-linejoin="round" paint-order="stroke">13 REVERE PL</text>
-      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#E8D9B0" stroke-width="4" stroke-linejoin="round" paint-order="stroke">CROWN HEIGHTS, BROOKLYN</text>
-      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#E8D9B0" stroke-width="4" stroke-linejoin="round" paint-order="stroke">NEW YORK, N.Y. 11213</text>
+      <!-- RETURN ADDRESS — polygon is clipped away from this area via clip-no-addr -->
+      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C">13 REVERE PL</text>
+      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C">CROWN HEIGHTS, BROOKLYN</text>
+      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C">NEW YORK, N.Y. 11213</text>
 
       <!-- POSTMARK -->
       <g transform="translate(486,184) rotate(-10)" opacity="0.4">
@@ -2132,9 +2219,12 @@ def assemble_newsletter(client):
     market_list = fetch_market_data()
     market_result = market_go_nogo(saturday_data, market_list)
 
-    # 5. BPL events
+    # 5. BPL events + Salon on Kingston
     print("Scraping BPL events...")
     bpl_events = fetch_bpl_events()
+    print("Scraping Salon on Kingston events...")
+    salon_events = fetch_salon_kingston_events()
+    print(f"  Salon on Kingston events found: {len(salon_events)}")
 
     # 6. Brooklyn culture news
     print("Fetching Brooklyn news feeds...")
@@ -2151,7 +2241,8 @@ def assemble_newsletter(client):
             market_result, market_list,
             bpl_events,
             brooklyn_news,
-            client
+            client,
+            salon_events=salon_events,
         )
     else:
         print("No Anthropic client — using placeholder narrative sections...")
