@@ -85,6 +85,35 @@ MTA_ALERTS_FEED = (
     "https://api-endpoint.mta.info/Dataservice/mtagtfsfeeds/camsys%2Fsubway-alerts.json"
 )
 
+# The home-station status banner is built from EXACTLY these two stations — the
+# closest stop on each of Zach's two home lines (the 3 and the C). Banner logic
+# keys off these two only; the wider A/C/3 change list below the banner is
+# separate. stop_ids verified against stops.txt (see HOME_STOPS).
+BANNER_STATIONS = [
+    {"stop_id": "249", "name": "Kingston Av",         "line": "3"},
+    {"stop_id": "A47", "name": "Kingston–Throop Avs", "line": "C"},
+]
+
+# Alternate-station lookup for the banner's "go to ___ instead" recommendation.
+#
+# Ordered by ESTIMATED walking distance from home (Bergen/Dean & Kingston Ave),
+# nearest first. ⚠️ WALK ORDER IS AN ESTIMATE — Zach should verify the ranking
+# against his own read of the blocks; the distances are rough and unconfirmed.
+#
+# `lines` lists only the A/C/3 services we care about that each station serves;
+# other lines a station also has (2/4/5, B, S, …) are omitted on purpose.
+# Franklin Av is really two linked stations across a transfer — IND [C]
+# (stop A45) and IRT [3] (stop 239) — listed once, covering both the C and 3.
+ALTERNATE_STATIONS = [
+    {"stop_id": "A47", "name": "Kingston–Throop Avs",        "lines": ["C"],      "walk": "~0.4 mi north, on Fulton St"},
+    {"stop_id": "249", "name": "Kingston Av",                "lines": ["3"],      "walk": "~0.5 mi south, on Eastern Pkwy"},
+    {"stop_id": "A46", "name": "Nostrand Av (Fulton St)",    "lines": ["A", "C"], "walk": "~0.6 mi northwest"},
+    {"stop_id": "248", "name": "Nostrand Av (Eastern Pkwy)", "lines": ["3"],      "walk": "~0.6 mi southwest"},
+    {"stop_id": "A48", "name": "Utica Av (Fulton St)",       "lines": ["A", "C"], "walk": "~0.7 mi northeast"},
+    {"stop_id": "250", "name": "Crown Heights–Utica Av",     "lines": ["3"],      "walk": "~0.7 mi southeast"},
+    {"stop_id": "A45", "name": "Franklin Av",                "lines": ["C", "3"], "walk": "~0.9 mi west"},
+]
+
 # BPL Central Branch
 BPL_EVENTS_URL = "https://www.bklynlibrary.org/events"
 BPL_BRANCH_FILTER = "Central Library"  # 560 New York Ave at Maple St
@@ -453,22 +482,17 @@ def fetch_mta_alerts(saturday, sunday):
 
     Each alert carries an informed_entity[] list; an entity may name a route
     (route_id), a stop (stop_id), or both. For each alert we take the union of
-    all route_ids and all stop_ids across its entities, then:
+    all route_ids and all stop_ids across its entities, and keep it only if it
+    informs one of HOME_LINES (A / C / 3).
 
-      - keep it only if it informs one of HOME_LINES (A / C / 3); and
-      - split it into one of two groups by its informed stops:
-
-        your_stations — informs one of the five HOME_STOPS, OR is line-level
-                        (names no specific stop at all — affects the whole line,
-                        so it counts as yours).
-        elsewhere     — names specific stops, none of which are home stops.
-
-    Returns {"your_stations": [...], "elsewhere": [...]}. Each item is a dict:
+    Returns a flat list (no your/elsewhere grouping — the banner and the single
+    A/C/3 change list are derived from this list downstream). Each item:
       {
         "text":          alert header (falls back to description),
         "routes":        ["A", "C", ...] limited to A/C/3, in HOME_LINES order,
-        "home_stations": ["Nostrand Av (A/C)", ...] labels for any home stops hit,
         "stop_ids":      sorted list of every stop_id the alert names,
+        "is_line_level": True when the alert names no specific stop (whole-line
+                         change); False when it names one or more stops,
       }
     """
     headers = {
@@ -483,13 +507,12 @@ def fetch_mta_alerts(saturday, sunday):
         r.raise_for_status()
         data = r.json()
     except Exception:
-        return {"your_stations": [], "elsewhere": []}
+        return []
 
     home_lines = set(HOME_LINES)
-    home_stops = set(HOME_STOPS)
     win_start, win_end = _weekend_epoch_window(saturday, sunday)
 
-    your_stations, elsewhere = [], []
+    alerts = []
     seen = set()
 
     for entity in data.get("entity", []):
@@ -526,23 +549,14 @@ def fetch_mta_alerts(saturday, sunday):
             continue
         seen.add(dedupe_key)
 
-        home_hits = stops & home_stops
-        item = {
+        alerts.append({
             "text": text,
             "routes": [r for r in HOME_LINES if r in matched_routes],
-            "home_stations": [label for sid, label in HOME_STOPS.items()
-                              if sid in home_hits],
             "stop_ids": sorted(stops),
-        }
+            "is_line_level": not stops,
+        })
 
-        # Home stop hit, OR line-level (no specific stop) -> yours.
-        # Otherwise it names specific, non-home stops -> elsewhere.
-        if home_hits or not stops:
-            your_stations.append(item)
-        else:
-            elsewhere.append(item)
-
-    return {"your_stations": your_stations, "elsewhere": elsewhere}
+    return alerts
 
 
 def fetch_surface_transit_alerts():
@@ -1185,73 +1199,185 @@ Write it as one cohesive email. Don't start with "Hello" or "Hi Zach." Just star
 # EMAIL ASSEMBLY
 # ─────────────────────────────────────────────
 
-def build_mta_section_html(mta_groups, surface_alerts):
+def _extract_recommended_lines(text):
     """
-    Render the body of the MTA section from structured alert data (not prose):
-    'Your stations' first, then 'Elsewhere on the A/C/3', each a stack of alert
-    cards reusing the existing .news-item styling. An empty group is omitted
-    entirely, header and all. If both A/C/3 groups are empty, show the same
-    kind of plain empty-state line the dispatch used before.
+    Pull a recommended line out of alert text like 'Take the [A] instead' or
+    'use the [A]'. MTA brackets routes, e.g. [A]. Returns the recommended
+    A/C/3 line letters in mention order (deduped); other lines are ignored
+    because the alternate lookup only covers A/C/3.
+    """
+    import re
+    recs = []
+    low = text.lower()
+    for m in re.finditer(r'(?:take|use|board|catch|via|transfer to)\s+the\s+\[([a-z0-9])\]', low):
+        recs.append(m.group(1).upper())
+    for m in re.finditer(r'\[([a-z0-9])\]\s+instead', low):
+        recs.append(m.group(1).upper())
+    out = []
+    for r in recs:
+        if r in HOME_LINES and r not in out:
+            out.append(r)
+    return out
 
-    Surface-transit disruptions (B65/B43/AirTrain/LIRR), when present, follow
-    underneath — still conditional, shown only when something is actually cut.
+
+def _recommend_alternate(station, statuses, disrupted_lines, affected_stops):
+    """
+    Pick an alternate station for an affected home station, in priority order:
+      (a) the OTHER home station, if it isn't affected this weekend;
+      (b) a line the alert explicitly recommends ('take the [A]') -> nearest
+          ALTERNATE_STATIONS entry serving that (still-running) line;
+      (c) otherwise the nearest other station on a running A/C/3 service;
+      (d) if everything nearby is disrupted, say so.
+    Returns a plain-English sentence. `disrupted_lines` are lines with a
+    weekend-active whole-line change; `affected_stops` are directly-named stops.
+    """
+    home_id = station["stop_id"]
+
+    def line_running(line):
+        return line not in disrupted_lines
+
+    def usable(entry):
+        if entry["stop_id"] in affected_stops:
+            return False
+        return any(line_running(l) for l in entry["lines"])
+
+    # (a) the other home station, if it's clear
+    for other in statuses:
+        if other["stop_id"] != home_id and not other["affected"]:
+            return (f'Take your other home station, {other["name"]} '
+                    f'([{other["line"]}]), instead — it\'s unaffected this weekend.')
+
+    # (b) a line the alert points you to -> nearest station serving it
+    rec_lines = []
+    for a in station["alerts"]:
+        rec_lines += _extract_recommended_lines(a["text"])
+    for rl in rec_lines:
+        if not line_running(rl):
+            continue
+        for entry in ALTERNATE_STATIONS:
+            if entry["stop_id"] == home_id or entry["stop_id"] in affected_stops:
+                continue
+            if rl in entry["lines"]:
+                return (f'The alert points you to the [{rl}] — nearest is '
+                        f'{entry["name"]} ({entry["walk"]}).')
+
+    # (c) nearest other station on a running A/C/3 service
+    for entry in ALTERNATE_STATIONS:
+        if entry["stop_id"] == home_id:
+            continue
+        if usable(entry):
+            running = "/".join(l for l in entry["lines"] if line_running(l))
+            return (f'Nearest running alternative: {entry["name"]} '
+                    f'([{running}], {entry["walk"]}).')
+
+    # (d) nothing nearby is running
+    return ("Every nearby A/C/3 station is disrupted this weekend — "
+            "check the MTA app before you head out.")
+
+
+def build_home_station_banner(alerts):
+    """
+    Build the home-station status banner from the weekend-active A/C/3 alerts,
+    considering EXACTLY the two BANNER_STATIONS (Kingston Av [3] and
+    Kingston–Throop Avs [C]).
+
+    A station is "touched" if an alert names its stop directly, or a whole-line
+    (line-level) change hits its line. All-clear renders one calm line in the
+    section's prose style; if one/both are affected, each gets a line naming
+    what's happening plus an alternate recommendation (see _recommend_alternate).
+    Returns an HTML string.
     """
     import html as _html
 
-    def render_item(item, show_station):
-        routes = "/".join(item.get("routes", []))
-        if show_station and item.get("home_stations"):
-            eyebrow = ", ".join(item["home_stations"])
-        elif routes:
-            eyebrow = f"{routes} line"
-        else:
-            eyebrow = ""
-        eyebrow_html = (f'<div class="news-source">{_html.escape(eyebrow)}</div>'
-                        if eyebrow else "")
-        body = _html.escape(item.get("text", ""))
-        return f"""
-            <div class="news-item">
-              {eyebrow_html}
-              <div class="news-hed">{body}</div>
-            </div>"""
+    affected_stops = set()
+    disrupted_lines = set()          # lines with a whole-line (line-level) change
+    for a in alerts:
+        affected_stops.update(a["stop_ids"])
+        if a["is_line_level"]:
+            disrupted_lines.update(a["routes"])
 
-    def render_group(label, items, show_station):
-        if not items:
-            return ""
-        cards = "".join(render_item(i, show_station) for i in items)
-        return f"""
+    # Evaluate the two banner stations
+    statuses = []
+    for st in BANNER_STATIONS:
+        relevant = [
+            a for a in alerts
+            if st["stop_id"] in a["stop_ids"]
+            or (a["is_line_level"] and st["line"] in a["routes"])
+        ]
+        affected = (st["stop_id"] in affected_stops) or (st["line"] in disrupted_lines)
+        statuses.append({
+            "stop_id": st["stop_id"], "name": st["name"], "line": st["line"],
+            "affected": affected, "alerts": relevant,
+        })
+
+    if not any(s["affected"] for s in statuses):
+        names = " and ".join(f'{s["name"]} ([{s["line"]}])' for s in statuses)
+        return (f'<p class="mta-banner mta-banner--clear">All clear at your home '
+                f'stations — {names} are running normally this weekend.</p>')
+
+    paras = []
+    for s in statuses:
+        if not s["affected"]:
+            continue
+        whats = s["alerts"][0]["text"] if s["alerts"] else "a service change is in effect"
+        rec = _recommend_alternate(s, statuses, disrupted_lines, affected_stops)
+        paras.append(
+            f'<p class="mta-banner mta-banner--alert">'
+            f'<strong>{_html.escape(s["name"])} ([{s["line"]}])</strong>: '
+            f'{_html.escape(whats)}. {_html.escape(rec)}</p>'
+        )
+    return "".join(paras)
+
+
+def build_mta_section_html(alerts, surface_alerts):
+    """
+    Render the MTA section body: a home-station status banner on top, then a
+    single 'Service changes on the A, C & 3' list of every weekend-active
+    change (flat — no your/elsewhere grouping), reusing the .news-item cards.
+    Surface-transit disruptions, when present, follow underneath (unchanged
+    'only if disrupted' rule).
+    """
+    import html as _html
+
+    html = build_home_station_banner(alerts)
+
+    if alerts:
+        cards = ""
+        for a in alerts:
+            routes = "/".join(a.get("routes", []))
+            eyebrow = (f'<div class="news-source">{_html.escape(routes)} line</div>'
+                       if routes else "")
+            cards += f"""
+            <div class="news-item">
+              {eyebrow}
+              <div class="news-hed">{_html.escape(a["text"])}</div>
+            </div>"""
+        html += f"""
           <div class="mta-group">
-            <div class="mta-group-label">{label}</div>
+            <div class="mta-group-label">Service changes on the A, C &amp; 3</div>
             <div class="news-feed">{cards}</div>
           </div>"""
 
-    your = mta_groups.get("your_stations", [])
-    elsewhere = mta_groups.get("elsewhere", [])
-
-    html = ""
-    html += render_group("Your stations", your, show_station=True)
-    html += render_group("Elsewhere on the A/C/3", elsewhere, show_station=False)
-
-    if not html:
-        html = "<p>No current service alerts on the A, C, or 3.</p>"
-
     # Surface transit — conditional, only when a service is actually disrupted.
     if surface_alerts:
-        surface_items = []
+        s_cards = ""
         for a in surface_alerts:
-            surface_items.append({
-                "text": a.get("text", ""),
-                "routes": [],
-                "home_stations": [a.get("service", "")],
-            })
-        html += render_group("Buses · AirTrain · LIRR", surface_items,
-                             show_station=True)
+            s_cards += f"""
+            <div class="news-item">
+              <div class="news-source">{_html.escape(a.get("service", ""))}</div>
+              <div class="news-hed">{_html.escape(a.get("text", ""))}</div>
+            </div>"""
+        html += f"""
+          <div class="mta-group">
+            <div class="mta-group-label">Buses · AirTrain · LIRR</div>
+            <div class="news-feed">{s_cards}</div>
+          </div>"""
 
     return html
 
 
 def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
-                     mta_groups, surface_alerts):
+                     mta_alerts, surface_alerts):
     sat_label = saturday.strftime("%A, %B %d")
     sun_label = sunday.strftime("%B %d")
     sat_date_top = saturday.strftime("%B %d")
@@ -1297,8 +1423,8 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
 
         if key == "MTA THIS WEEKEND":
             # MTA is rendered from structured alert data, not Claude prose:
-            # two informed-entity groups, reusing the .news-item card styling.
-            mta_html = build_mta_section_html(mta_groups, surface_alerts)
+            # a home-station status banner plus a single A/C/3 change list.
+            mta_html = build_mta_section_html(mta_alerts, surface_alerts)
             html_sections += f"""
         <div class="b4-section">
           <div class="b4-label-row">
@@ -1521,6 +1647,10 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
   .b4-section p:last-child {{ margin-bottom: 0; }}
   .b4-section a {{ color: #9B3A1A; }}
   .news-feed {{ display: flex; flex-direction: column; gap: 0; }}
+  .mta-banner {{ font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16px; line-height: 1.6; color: #2A1E0A; margin: 0 0 16px; padding: 12px 16px; background: #EFE3C3; }}
+  .mta-banner strong {{ color: #9B3A1A; font-weight: 600; }}
+  .mta-banner--clear {{ border-left: 3px solid #C4A46A; }}
+  .mta-banner--alert {{ border-left: 3px solid #9B3A1A; }}
   .mta-group {{ margin-bottom: 20px; }}
   .mta-group:last-child {{ margin-bottom: 0; }}
   .mta-group-label {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #9B3A1A; margin-bottom: 12px; }}
@@ -1849,10 +1979,10 @@ def build_envelope_email(saturday, sunday, newsletter_url):
       <line x1="6" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
       <line x1="614" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
 
-      <!-- RETURN ADDRESS (aligned with stamp band) -->
-      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#7A5A28">13 REVERE PL</text>
-      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#7A5A28">CROWN HEIGHTS, BROOKLYN</text>
-      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#7A5A28">NEW YORK, N.Y. 11213</text>
+      <!-- RETURN ADDRESS — stroke knockout ensures text reads over fold polygons on iOS Mail -->
+      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#E8D9B0" stroke-width="4" stroke-linejoin="round" paint-order="stroke">13 REVERE PL</text>
+      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#E8D9B0" stroke-width="4" stroke-linejoin="round" paint-order="stroke">CROWN HEIGHTS, BROOKLYN</text>
+      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#E8D9B0" stroke-width="4" stroke-linejoin="round" paint-order="stroke">NEW YORK, N.Y. 11213</text>
 
       <!-- POSTMARK -->
       <g transform="translate(486,184) rotate(-10)" opacity="0.4">
@@ -1937,19 +2067,35 @@ def send_email(html_body, saturday):
 # MAIN
 # ─────────────────────────────────────────────
 
-def main():
-    print("Initializing Weekend Dispatch...")
+def _placeholder_narrative():
+    """
+    Stand-in for the Claude-written sections so --preview can render a full
+    layout without an ANTHROPIC_API_KEY. Uses the exact section labels
+    build_email_html parses (and one [SOURCE] block for Around Brooklyn). The
+    MTA section is unaffected — it is rendered from live alert data, not this.
+    """
+    ph = "[Preview placeholder — set ANTHROPIC_API_KEY to generate this section.]"
+    return (
+        f"WEATHER + MABEL\n{ph}\n\n"
+        f"GRAND ARMY PLAZA GREENMARKET\n{ph}\n\n"
+        f"BROOKLYN PUBLIC LIBRARY\n{ph}\n\n"
+        f"AROUND BROOKLYN\n[Preview]\nPlaceholder headline — {ph}"
+    )
 
-    # Check env vars
-    required = ["ANTHROPIC_API_KEY", "DISPATCH_EMAIL", "DISPATCH_APP_PASSWORD", "DISPATCH_TO"]
-    missing = [k for k in required if not os.environ.get(k)]
-    if missing:
-        print(f"⚠️  Missing env vars: {', '.join(missing)}")
-        print("   Set them and re-run. For local testing, you can export them in your shell.")
-        return
 
-    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+def assemble_newsletter(client):
+    """
+    Run every fetch and build the full newsletter HTML — the same data and the
+    same section rendering the live dispatch uses, so main() and --preview stay
+    in lockstep.
 
+    `client` is an Anthropic client for the Claude-written sections (Weather,
+    Greenmarket, BPL, Around Brooklyn). Pass None to fall back to placeholder
+    text for just those sections so the layout still renders. The MTA section
+    is always built for real from live alert data, regardless.
+
+    Returns (newsletter_html, narrative, saturday, sunday).
+    """
     # Determine weekend dates
     today = datetime.date.today()
     days_until_sat = (5 - today.weekday()) % 7
@@ -1970,11 +2116,10 @@ def main():
     sat_windows = get_walk_windows(saturday_data, "saturday") if saturday_data else []
     sun_windows = get_walk_windows(sunday_data, "sunday") if sunday_data else []
 
-    # 3. MTA — planned A/C/3 alerts active this weekend, grouped by informed entity
+    # 3. MTA — planned A/C/3 service changes active this weekend (flat list)
     print("Fetching MTA alerts...")
-    mta_groups = fetch_mta_alerts(saturday, sunday)
-    print(f"  A/C/3 alerts — your stations: {len(mta_groups['your_stations'])}, "
-          f"elsewhere: {len(mta_groups['elsewhere'])}")
+    mta_alerts = fetch_mta_alerts(saturday, sunday)
+    print(f"  A/C/3 weekend service changes: {len(mta_alerts)}")
     surface_alerts = fetch_surface_transit_alerts()
     if surface_alerts:
         print(f"  Surface-transit disruptions: "
@@ -1997,25 +2142,82 @@ def main():
     slot6 = brooklyn_news.get("_slot6_winner", "?")
     print(f"  Slot 6 winner: {slot6}")
 
-    # 7. Claude narrative
-    print("Generating narrative...")
-    narrative = generate_narrative(
-        saturday_data, sunday_data,
-        sat_windows, sun_windows,
-        market_result, market_list,
-        bpl_events,
-        brooklyn_news,
-        client
-    )
+    # 7. Narrative — Claude when we have a client, placeholder otherwise
+    if client is not None:
+        print("Generating narrative...")
+        narrative = generate_narrative(
+            saturday_data, sunday_data,
+            sat_windows, sun_windows,
+            market_result, market_list,
+            bpl_events,
+            brooklyn_news,
+            client
+        )
+    else:
+        print("No Anthropic client — using placeholder narrative sections...")
+        narrative = _placeholder_narrative()
 
-    # 8. Build newsletter HTML + save locally
+    # 8. Build newsletter HTML
     print("Building newsletter...")
     newsletter_html = build_email_html(narrative, saturday_data, sunday_data,
-                                       saturday, sunday, mta_groups, surface_alerts)
+                                       saturday, sunday, mta_alerts, surface_alerts)
+    return newsletter_html, narrative, saturday, sunday
+
+
+def run_preview():
+    """
+    Local preview: build the full newsletter exactly as main() does — same
+    fetches, same section rendering — but write it to weekend_preview.html and
+    open it in the browser with `open`. Sends NO email and runs NO git commands.
+
+    Uses ANTHROPIC_API_KEY from the env for the Claude-written sections; if it
+    is not set, those sections fall back to placeholder text so the layout
+    still renders. The MTA section always uses live data.
+    """
+    import pathlib
+    import subprocess
+
+    print("Building local preview (no email, no git)...")
+
+    api_key = os.environ.get("ANTHROPIC_API_KEY")
+    if api_key:
+        print("  ANTHROPIC_API_KEY found — generating real narrative sections")
+        client = anthropic.Anthropic(api_key=api_key)
+    else:
+        print("  ANTHROPIC_API_KEY not set — placeholder text for narrative sections")
+        client = None
+
+    newsletter_html, _narrative, _saturday, _sunday = assemble_newsletter(client)
+
+    path = pathlib.Path.cwd() / "weekend_preview.html"
+    path.write_text(newsletter_html, encoding="utf-8")
+    print(f"  Wrote {path}")
+
+    subprocess.run(["open", str(path)], check=False)
+    print(f"✓ Preview opened in browser: {path}")
+
+
+def main():
+    print("Initializing Weekend Dispatch...")
+
+    # Check env vars
+    required = ["ANTHROPIC_API_KEY", "DISPATCH_EMAIL", "DISPATCH_APP_PASSWORD", "DISPATCH_TO"]
+    missing = [k for k in required if not os.environ.get(k)]
+    if missing:
+        print(f"⚠️  Missing env vars: {', '.join(missing)}")
+        print("   Set them and re-run. For local testing, you can export them in your shell.")
+        return
+
+    client = anthropic.Anthropic(api_key=os.environ["ANTHROPIC_API_KEY"])
+
+    # Steps 1–8: fetch everything and build the newsletter HTML
+    newsletter_html, narrative, saturday, sunday = assemble_newsletter(client)
+
+    # 9. Save + push to GitHub Pages
     newsletter_url = save_newsletter_html(newsletter_html, saturday)
     print(f"  Newsletter saved: {newsletter_url}")
 
-    # 9. Build envelope email + send
+    # 10. Build envelope email + send
     print("Building envelope email...")
     envelope_html = build_envelope_email(saturday, sunday, newsletter_url)
 
@@ -2030,4 +2232,16 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    import argparse
+
+    parser = argparse.ArgumentParser(description="Crown Heights Weekend Dispatch")
+    parser.add_argument(
+        "--preview", action="store_true",
+        help="Build weekend_preview.html and open it locally — no email, no git."
+    )
+    args = parser.parse_args()
+
+    if args.preview:
+        run_preview()
+    else:
+        main()
