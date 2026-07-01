@@ -1733,7 +1733,7 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
   .b4-section a {{ color: #9B3A1A; }}
   .news-feed {{ display: flex; flex-direction: column; gap: 0; }}
   .news-item + .news-item {{ border-top: 1px solid #D4B98A; padding-top: 16px; margin-top: 4px; }}
-  .mta-banner {{ font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16px; line-height: 1.6; color: #2A1E0A; margin: 0 0 16px; padding: 12px 16px; background: #EFE3C3; }}
+  .mta-banner {{ font-family: 'Cormorant Garamond', Georgia, serif; font-size: 16px; line-height: 1.6; color: #2A1E0A; margin: 0 0 16px; padding: 12px 16px; background: #EFE3C3; overflow-wrap: break-word; word-break: break-word; }}
   .mta-banner strong {{ color: #9B3A1A; font-weight: 600; }}
   .mta-banner--clear {{ border-left: 3px solid #C4A46A; }}
   .mta-banner--alert {{ border-left: 3px solid #9B3A1A; }}
@@ -1745,7 +1745,7 @@ def build_email_html(narrative, saturday_data, sunday_data, saturday, sunday,
   .news-source {{ font-family: 'Courier Prime', monospace; font-size: 8px; letter-spacing: 0.22em; text-transform: uppercase; color: #B89A5A; margin-bottom: 8px; }}
   .news-headline-row {{ margin-bottom: 8px; }}
   .news-headline-row:last-child {{ margin-bottom: 0; }}
-  .news-hed {{ font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 600; font-size: 15px; line-height: 1.3; color: #1A1208; margin-bottom: 5px; }}
+  .news-hed {{ font-family: 'Cormorant Garamond', Georgia, serif; font-weight: 600; font-size: 15px; line-height: 1.3; color: #1A1208; margin-bottom: 5px; overflow-wrap: break-word; word-break: break-word; }}
   .news-hed a {{ color: #1A1208; text-decoration: none; border-bottom: 1px solid #D4B98A; }}
   .news-dek {{ font-family: 'Cormorant Garamond', Georgia, serif; font-style: italic; font-size: 13.5px; color: #6A5030; line-height: 1.55; }}
   .b4-footer {{
@@ -1922,13 +1922,16 @@ def build_envelope_email(saturday, sunday, newsletter_url):
   .peek-eyebrow {{
     font-family: 'Courier Prime', monospace;
     font-size: 7.5px;
-    letter-spacing: 0.28em;
+    letter-spacing: 0.14em;
     text-transform: uppercase;
     color: #8A6A3A;
     margin-bottom: 6px;
     display: flex;
     justify-content: space-between;
+    gap: 8px;
+    overflow: hidden;
   }}
+  .peek-eyebrow span {{ min-width: 0; white-space: nowrap; overflow: hidden; }}
 
   .peek-title {{
     font-family: 'Cormorant Garamond', Georgia, serif;
@@ -2004,7 +2007,7 @@ def build_envelope_email(saturday, sunday, newsletter_url):
           <stop offset="0.5" stop-color="#ECDFBE"/>
           <stop offset="1" stop-color="#E2D2AC"/>
         </linearGradient>
-        <linearGradient id="sideL" x1="0" y1="0" x2="1" y2="0.4">
+        <linearGradient id="sideL" x1="6" y1="76" x2="310" y2="201" gradientUnits="userSpaceOnUse">
           <stop offset="0" stop-color="#E6D7B2"/><stop offset="1" stop-color="#D2C098"/>
         </linearGradient>
         <linearGradient id="sideR" x1="1" y1="0" x2="0" y2="0.4">
@@ -2020,10 +2023,6 @@ def build_envelope_email(saturday, sunday, newsletter_url):
           <stop offset="0" stop-color="#B49A66" stop-opacity="0.55"/>
           <stop offset="1" stop-color="#B49A66" stop-opacity="0"/>
         </linearGradient>
-        <!-- Clip the left fold polygon away from the return address so iOS Mail can't obscure it -->
-        <clipPath id="clip-no-addr">
-          <path fill-rule="evenodd" d="M0,0 H620 V400 H0 Z M26,178 H252 V242 H26 Z"/>
-        </clipPath>
         <radialGradient id="waxBody" cx="0.36" cy="0.30" r="0.85">
           <stop offset="0" stop-color="#C75732"/>
           <stop offset="0.4" stop-color="#A23F1D"/>
@@ -2051,8 +2050,7 @@ def build_envelope_email(saturday, sunday, newsletter_url):
       <!-- ENVELOPE BODY -->
       <rect x="6" y="74" width="608" height="318" rx="7" fill="url(#paper)" stroke="#C2A668" stroke-width="1.5"/>
 
-      <!-- side + bottom folds meet at center (310,224) -->
-      <polygon points="6,76 6,390 310,224" fill="url(#sideL)" opacity="0.92" clip-path="url(#clip-no-addr)"/>
+      <polygon points="6,76 6,390 310,224" fill="url(#sideL)" opacity="0.92"/>
       <polygon points="614,76 614,390 310,224" fill="url(#sideR)" opacity="0.92"/>
       <polygon points="6,390 614,390 310,224" fill="url(#bottomP)" opacity="0.95"/>
       <line x1="6" y1="76" x2="310" y2="224" stroke="#BBA269" stroke-width="1" opacity="0.5"/>
@@ -2069,10 +2067,10 @@ def build_envelope_email(saturday, sunday, newsletter_url):
       <line x1="6" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
       <line x1="614" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
 
-      <!-- RETURN ADDRESS — polygon is clipped away from this area via clip-no-addr -->
-      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C">13 REVERE PL</text>
-      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C">CROWN HEIGHTS, BROOKLYN</text>
-      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C">NEW YORK, N.Y. 11213</text>
+      <!-- RETURN ADDRESS — stroke halo keeps text legible over the fold polygon on iOS Mail -->
+      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">13 REVERE PL</text>
+      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">CROWN HEIGHTS, BROOKLYN</text>
+      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">NEW YORK, N.Y. 11213</text>
 
       <!-- POSTMARK -->
       <g transform="translate(486,184) rotate(-10)" opacity="0.4">
