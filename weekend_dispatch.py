@@ -2067,11 +2067,6 @@ def build_envelope_email(saturday, sunday, newsletter_url):
       <line x1="6" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
       <line x1="614" y1="76" x2="310" y2="4" stroke="#CBB376" stroke-width="1" opacity="0.6"/>
 
-      <!-- RETURN ADDRESS — stroke halo keeps text legible over the fold polygon on iOS Mail -->
-      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">13 REVERE PL</text>
-      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">CROWN HEIGHTS, BROOKLYN</text>
-      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">NEW YORK, N.Y. 11213</text>
-
       <!-- POSTMARK -->
       <g transform="translate(486,184) rotate(-10)" opacity="0.4">
         <circle cx="23" cy="23" r="21" stroke="#6A5030" stroke-width="2" fill="none"/>
@@ -2107,6 +2102,11 @@ def build_envelope_email(saturday, sunday, newsletter_url):
         <text x="314.5" y="231" font-family="'Cormorant Garamond', Georgia, serif" font-style="italic" font-size="22" fill="#4A1A08" opacity="0.6" text-anchor="middle">W.D.</text>
         <text x="313" y="229.5" font-family="'Cormorant Garamond', Georgia, serif" font-style="italic" font-size="22" fill="#E9B89C" text-anchor="middle">W.D.</text>
       </g>
+
+      <!-- RETURN ADDRESS — drawn last so it paints above all fold polygons in iOS Mail -->
+      <text x="34" y="194" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">13 REVERE PL</text>
+      <text x="34" y="212" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">CROWN HEIGHTS, BROOKLYN</text>
+      <text x="34" y="230" font-family="'Courier Prime', monospace" font-size="11" letter-spacing="1.5" fill="#5A400C" stroke="#F0E4C0" stroke-width="3" paint-order="stroke fill">NEW YORK, N.Y. 11213</text>
     </svg>
   </div>
 
